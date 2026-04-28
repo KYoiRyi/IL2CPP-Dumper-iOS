@@ -1,38 +1,110 @@
-# IL2CPP Dumper for Arknights: Endfield & Unity Games
+# IL2CPP Dumper
 
-Simple injectable DLL that dumps IL2CPP metadata from Unity games (classes, fields, methods, namespaces, interfaces, etc.).
+Static + live runtime metadata extractor for Unity IL2CPP games on Windows x64.
+Originally written for Arknights: Endfield, works on any modern IL2CPP build.
 
-Originally created for **Arknights: Endfield**.
+This release replaces the old INSERT-based workflow with a single self-contained
+launcher (`Il2cppDumper.exe`). The DLL is embedded as a resource and manually
+mapped into the target process - no separate files to copy around.
 
-### Features
-- Dumps every assembly from `GameAssembly.dll`
-- Two output formats:
-  - **Classic C# style** - readable `.cs` files with proper syntax, access modifiers, inheritance & interfaces
-  - **AI-friendly** - structured plain text, perfect for LLMs, code generation or parsing
-- Activation: press **INSERT** after DLL injection
-- Output paths:
-  - Normal dumps -> `C:\IL2CPP_Dump_Normal\`
-  - AI dumps    -> `C:\IL2CPP_Dump_AI\`
-- Log file -> `C:\IL2CPPDump_Log.txt`
+## What's new in this update
 
-### Supported IL2CPP versions
-IL2CPP metadata `≈27-29` (Unity 2021.3 - 2023.x - 2024.x builds)
+- Single launcher `.exe`, embedded DLL via `RCDATA` resource
+- File-picker dialog at startup (or pass exe path on the command line)
+- Auto-elevates via UAC if the target requires admin
+- Auto-dump on inject (INSERT key no longer needed)
+- Output goes next to the launcher, not `C:\`
+- Skips re-dumping if `IL2CPP_Dump_Normal/AI/` already exist
+- Hotkeys for live runtime snapshots (camera, scene, components, mesh colliders, targeted class scan)
+- GC-aware worker thread with `il2cpp_thread_attach` + retry, no more spontaneous "Collecting from unknown thread" aborts
+- Dump format gained: properties, events, attributes, generic types, class size, type modifiers, method tokens, RVA reasons (abstract/extern/icall/generic def), const literal values
+- 92%+ RVA resolution rate (direct read of `MethodInfo->methodPointer` as fallback)
 
-### Example outputs
+## Build
 
-**Classic C# format** (looks almost like real source code):
+1. Open `Dump.sln` in Visual Studio 2022 (v143 toolset, Windows SDK 10.0)
+2. Build `Release | x64`
 
-![Classic C# dump example](https://github.com/user-attachments/assets/9af853d4-249c-46c7-bdd5-498f3b191180)
+The launcher project depends on the DLL and pulls it in as an embedded
+resource. Output: `x64/Release/Il2cppDumper.exe`.
 
-**AI-friendly structured format** (easy for AI tools):
+## Run
 
-![AI-friendly dump example](https://github.com/user-attachments/assets/cc9e636c-6ca3-4c1d-af51-2ee3bf7e0444)
+Double-click `Il2cppDumper.exe`. A file picker asks for the target `.exe`.
+The console auto-closes 5 seconds after a successful inject; the dumper's own
+console takes over inside the game.
 
-### Usage
-1. Inject the DLL into the game process (any injector works)
-2. Press **INSERT** while in-game
-3. Wait for completion (watch the console and log file)
+You can also drag a target `.exe` onto the launcher, or pass it as an argument.
 
-Great for reverse engineering, modding, cheat development or feeding game structure into AI models.
+## Static dump (auto, on inject)
 
-Contributions, issues and stars are welcome!
+Written next to the launcher:
+
+- `IL2CPP_Dump_Normal/<assembly>.cs` - C#-shaped output with namespaces,
+  inheritance, properties, events, attributes, RVA, tokens, sizes, type
+  modifiers (`sealed`/`abstract`/`static`)
+- `IL2CPP_Dump_AI/<assembly>.cs` - line-tagged format for grep/LLM input
+- `IL2CPP_Dump_Strings.txt` - every `static const string` literal across all assemblies
+- `IL2CPPDump_Log.txt` - session log
+
+Re-running with the dump folders already present skips the static pass.
+Delete the folders to force a fresh dump.
+
+## Live runtime (hotkeys)
+
+After the static dump completes, the DLL stays loaded and listens for keys:
+
+| Key | Action |
+| --- | ------ |
+| F5  | Full snapshot - camera + scene + mesh colliders |
+| F7  | Scene only (light) - GO list, positions, components, materials |
+| F11 | Scene deep - same plus MonoBehaviour field values (slower) |
+| F8  | Main camera state (position, forward, fov, clip planes) |
+| F2  | Every `MeshCollider` in the scene → world-space mesh binary |
+| F3  | Targeted class scan - reads `IL2CPP_ScanList.txt` |
+| F6  | Exit, detach from runtime, unload DLL |
+
+### Targeted class scan
+
+Drop a file named `IL2CPP_ScanList.txt` next to the launcher with one
+fully-qualified class name per line (`#` for comments). F3 walks every live
+instance of those classes, dumping primitive fields and (for components)
+their world position. Useful for iterative work without scanning 40k+
+GameObjects every time.
+
+```
+# AI bot navigation
+Beyond.Gameplay.Core.NavigationManager
+Beyond.Gameplay.Core.NavigationComponent
+```
+
+### Output binaries
+
+`IL2CPP_MeshColliders_<ts>.bin`:
+
+```
+per collider:
+  uint32 instance_id
+  float  pos[3]
+  uint32 vertex_count
+  Vector3[vc]   verts (local-space)
+  uint32 index_count
+  int32[ic]     tris
+```
+
+A short text index (`IL2CPP_MeshColliders_<ts>.txt`) explains the layout
+and counts.
+
+## Notes
+
+- Works on x64 IL2CPP only.
+- Some games (e.g. Endfield) ship with `requireAdministrator` manifests; the
+  launcher auto-elevates via UAC.
+- Light scene dumps complete in well under a second on 40k GameObjects;
+  deep dumps are capped at 8 seconds / 2000 MonoBehaviours per pass.
+- Hardware tier (CPU cores + RAM) is detected at startup and used to scale
+  yield intervals - the game stays responsive even mid-dump.
+
+## License
+
+MIT.
