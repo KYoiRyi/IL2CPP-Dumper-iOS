@@ -30,10 +30,15 @@ jobs:
           THEOS: ${{ runner.temp }}/theos
         run: |
           make clean package FINALPACKAGE=1 TARGET=iphone:clang:latest:12.0
+          mkdir -p artifacts
+          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/IL2CPPDumper.dylib artifacts/
+          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/IL2CPPDumper.plist artifacts/
 
-      - name: Upload packages
+      - name: Upload iOS dylib
         uses: actions/upload-artifact@v4
         with:
-          name: packages
-          path: packages/*.deb
+          name: IL2CPPDumper-ios-dylib
+          path: |
+            artifacts/IL2CPPDumper.dylib
+            artifacts/IL2CPPDumper.plist
           if-no-files-found: error
