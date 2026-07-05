@@ -208,6 +208,7 @@ namespace api {
     extern int * gc_dont_gc_ptr;
 
     void init( );
+    bool try_dump_metadata_fallback( );
 
 }
 

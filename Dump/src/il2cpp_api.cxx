@@ -9,6 +9,7 @@
 #include <mach-o/loader.h>
 #include <mach/mach.h>
 #include <mach/vm_region.h>
+#include <vector>
 
 namespace api {
 
@@ -109,11 +110,11 @@ namespace api {
         constexpr uint32_t kMetadataMagic = 0xFAB11BAF;
         constexpr size_t kMinMetadataSize = 0x1000;
         constexpr size_t kMaxMetadataDumpSize = 512ULL * 1024ULL * 1024ULL;
+        constexpr size_t kScanChunkSize = 64 * 1024;
 
-        bool IsReadableRange( uintptr_t address, size_t size, size_t * regionLeft = nullptr ) {
-            if ( !address || !size )
-                return false;
-
+        bool QueryReadableRegion( uintptr_t address,
+            uintptr_t & startOut,
+            uintptr_t & endOut ) {
             vm_address_t region = static_cast< vm_address_t >( address );
             vm_size_t regionSize = 0;
             vm_region_basic_info_data_64_t info {};
@@ -128,21 +129,44 @@ namespace api {
 
             uintptr_t start = static_cast< uintptr_t >( region );
             uintptr_t end = start + static_cast< uintptr_t >( regionSize );
-            if ( address < start || size > end - address )
+            if ( address < start || address >= end )
                 return false;
             if ( ( info.protection & VM_PROT_READ ) == 0 )
                 return false;
 
+            startOut = start;
+            endOut = end;
+            return true;
+        }
+
+        bool IsReadableRange( uintptr_t address, size_t size, size_t * regionLeft = nullptr ) {
+            if ( !address || !size )
+                return false;
+
+            uintptr_t start = 0, end = 0;
+            if ( !QueryReadableRegion( address, start, end ) )
+                return false;
+            if ( size > end - address )
+                return false;
             if ( regionLeft )
                 *regionLeft = end - address;
             return true;
         }
 
-        bool ReadU32( uintptr_t address, uint32_t & out ) {
-            if ( !IsReadableRange( address, sizeof( out ) ) )
+        bool SafeRead( uintptr_t address, void * out, size_t size ) {
+            if ( !out || !size )
                 return false;
-            std::memcpy( &out, reinterpret_cast< const void * >( address ), sizeof( out ) );
-            return true;
+            vm_size_t copied = 0;
+            kern_return_t kr = vm_read_overwrite( mach_task_self( ),
+                static_cast< vm_address_t >( address ),
+                static_cast< vm_size_t >( size ),
+                reinterpret_cast< vm_address_t >( out ),
+                &copied );
+            return kr == KERN_SUCCESS && copied == size;
+        }
+
+        bool ReadU32( uintptr_t address, uint32_t & out ) {
+            return SafeRead( address, &out, sizeof( out ) );
         }
 
         bool IsMetadataPointer( uintptr_t ptr ) {
@@ -152,10 +176,10 @@ namespace api {
 
         size_t EstimateMetadataSize( uintptr_t metadata, size_t regionLeft ) {
             size_t result = 0;
-            if ( !IsReadableRange( metadata, 512 ) )
+            uint32_t words [ 128 ] = {};
+            if ( !SafeRead( metadata, words, sizeof( words ) ) )
                 return std::min( regionLeft, kMaxMetadataDumpSize );
 
-            const auto * words = reinterpret_cast< const uint32_t * >( metadata );
             for ( int i = 2; i + 1 < 128; i += 2 ) {
                 uint32_t offset = words [ i ];
                 uint32_t size = words [ i + 1 ];
@@ -191,13 +215,25 @@ namespace api {
                 return false;
             }
 
-            out.write( reinterpret_cast< const char * >( metadata ),
-                static_cast< std::streamsize >( dumpSize ) );
+            char buffer [ 16 * 1024 ];
+            size_t written = 0;
+            while ( written < dumpSize ) {
+                size_t todo = std::min( sizeof( buffer ), dumpSize - written );
+                if ( !SafeRead( metadata + written, buffer, todo ) )
+                    break;
+                out.write( buffer, static_cast< std::streamsize >( todo ) );
+                written += todo;
+            }
             out.close( );
+
+            if ( written < kMinMetadataSize ) {
+                Log( "[metadata] failed while reading metadata buffer" );
+                return false;
+            }
 
             char buf [ 256 ];
             sprintf_s( buf, "[metadata] dumped %zu bytes from %s -> %s",
-                dumpSize, source.c_str( ), path.c_str( ) );
+                written, source.c_str( ), path.c_str( ) );
             Log( buf );
             return true;
         }
@@ -211,12 +247,15 @@ namespace api {
         }
 
         bool TryDumpRuntimeMetadataFallback( ) {
-            static bool attempted = false;
-            if ( attempted )
-                return false;
-            attempted = true;
+            static bool dumped = false;
+            static bool loggedStart = false;
+            if ( dumped )
+                return true;
 
-            Log( "[metadata] il2cpp exports are hidden; scanning Mach-O data pointers" );
+            if ( !loggedStart ) {
+                Log( "[metadata] il2cpp exports are hidden; scanning Mach-O data pointers" );
+                loggedStart = true;
+            }
 
             for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
                 const auto * header = _dyld_get_image_header( i );
@@ -232,22 +271,51 @@ namespace api {
                     if ( cmd->cmd == LC_SEGMENT_64 ) {
                         const auto * seg = reinterpret_cast< const segment_command_64 * >( cmd );
                         if ( SegmentLooksData( seg ) && seg->vmsize >= sizeof( uintptr_t ) ) {
-                            uintptr_t start = static_cast< uintptr_t >( seg->vmaddr + slide );
-                            uintptr_t end = start + static_cast< uintptr_t >( seg->vmsize );
-                            if ( IsReadableRange( start, sizeof( uintptr_t ) ) ) {
-                                for ( uintptr_t p = start; p + sizeof( uintptr_t ) <= end;
-                                    p += sizeof( uintptr_t ) ) {
-                                    uintptr_t candidate = 0;
-                                    std::memcpy( &candidate, reinterpret_cast< const void * >( p ),
-                                        sizeof( candidate ) );
-                                    if ( IsMetadataPointer( candidate ) ) {
-                                        std::string source =
-                                            std::string( imageName ? imageName : "unknown" ) +
-                                            ":" + seg->segname;
-                                        if ( DumpMetadataBuffer( candidate, source ) )
-                                            return true;
+                            uintptr_t segStart = static_cast< uintptr_t >( seg->vmaddr + slide );
+                            uintptr_t segEnd = segStart + static_cast< uintptr_t >( seg->vmsize );
+                            if ( segEnd <= segStart )
+                                continue;
+
+                            uintptr_t pos = segStart;
+                            while ( pos < segEnd ) {
+                                uintptr_t regionStart = 0, regionEnd = 0;
+                                if ( !QueryReadableRegion( pos, regionStart, regionEnd ) ) {
+                                    pos += 0x4000;
+                                    continue;
+                                }
+
+                                uintptr_t scanStart = std::max( pos, regionStart );
+                                uintptr_t scanEnd = std::min( segEnd, regionEnd );
+                                if ( scanEnd <= scanStart ) {
+                                    pos += 0x4000;
+                                    continue;
+                                }
+
+                                std::vector<uint8_t> chunk( kScanChunkSize );
+                                for ( uintptr_t chunkStart = scanStart;
+                                    chunkStart + sizeof( uintptr_t ) <= scanEnd;
+                                    chunkStart += kScanChunkSize ) {
+                                    size_t chunkSize = std::min(
+                                        kScanChunkSize, static_cast< size_t >( scanEnd - chunkStart ) );
+                                    if ( !SafeRead( chunkStart, chunk.data( ), chunkSize ) )
+                                        continue;
+                                    for ( size_t off = 0; off + sizeof( uintptr_t ) <= chunkSize;
+                                        off += sizeof( uintptr_t ) ) {
+                                        uintptr_t candidate = 0;
+                                        std::memcpy( &candidate, chunk.data( ) + off,
+                                            sizeof( candidate ) );
+                                        if ( IsMetadataPointer( candidate ) ) {
+                                            std::string source =
+                                                std::string( imageName ? imageName : "unknown" ) +
+                                                ":" + seg->segname;
+                                            if ( DumpMetadataBuffer( candidate, source ) ) {
+                                                dumped = true;
+                                                return true;
+                                            }
+                                        }
                                     }
                                 }
+                                pos = scanEnd;
                             }
                         }
                     }
@@ -264,6 +332,10 @@ namespace api {
         }
     }
 
+    bool try_dump_metadata_fallback( ) {
+        return TryDumpRuntimeMetadataFallback( );
+    }
+
     void init( ) {
         if ( initialized ) {
             return;
@@ -273,7 +345,6 @@ namespace api {
         void * domainSym = ResolveSymbol( handle, "il2cpp_domain_get" );
         if ( !domainSym ) {
             Log( "[ERROR] il2cpp_domain_get not found in the current process" );
-            TryDumpRuntimeMetadataFallback( );
             return;
         }
 

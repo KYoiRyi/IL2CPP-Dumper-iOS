@@ -18,19 +18,36 @@ static bool EnvEnabled( const char * name ) {
 }
 
 static bool WaitForIl2CppReady( ) {
-    const DWORD totalTimeoutMs = 90000;
+    constexpr DWORD totalTimeoutMs = 90000;
+    constexpr DWORD apiPollMs = 250;
+    constexpr DWORD metadataStartDelayMs = 3000;
+    constexpr DWORD metadataScanIntervalMs = 1000;
     DWORD start = GetTickCount( );
+    DWORD lastMetadataScan = 0;
+    bool metadataDumped = false;
 
     while ( true ) {
         api::init( );
-        if ( api::initialized && api::get_domain && api::get_domain( ) )
+        if ( api::initialized && api::get_domain && api::get_domain( ) ) {
+            if ( metadataDumped )
+                Log( "[metadata] IL2CPP API became ready after fallback dump; using API dumper" );
             break;
+        }
 
-        if ( GetTickCount( ) - start > totalTimeoutMs ) {
-            Log( "[error] IL2CPP runtime was not ready before timeout" );
+        DWORD now = GetTickCount( );
+        if ( !metadataDumped && now - start >= metadataStartDelayMs &&
+            ( lastMetadataScan == 0 || now - lastMetadataScan >= metadataScanIntervalMs ) ) {
+            lastMetadataScan = now;
+            metadataDumped = api::try_dump_metadata_fallback( );
+        }
+
+        if ( now - start > totalTimeoutMs ) {
+            Log( metadataDumped
+                    ? "[error] IL2CPP API was not ready; metadata fallback was dumped"
+                    : "[error] IL2CPP runtime was not ready before timeout" );
             return false;
         }
-        Sleep( 500 );
+        Sleep( apiPollMs );
     }
 
     Log( "IL2CPP domain ready, settling for 12s before dumping..." );
