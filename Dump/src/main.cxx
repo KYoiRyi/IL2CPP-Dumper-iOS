@@ -30,7 +30,7 @@ static bool WaitForIl2CppReady( ) {
 
     while ( true ) {
         api::init( );
-        if ( api::initialized && api::get_domain && api::get_domain( ) ) {
+        if ( api::initialized ) {
             if ( metadataDumped )
                 Log( "[metadata] IL2CPP API became ready after fallback dump; using API dumper" );
             break;

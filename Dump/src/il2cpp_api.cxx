@@ -431,27 +431,24 @@ namespace api {
             ( method_get_param_t ) dlsym( handle, "il2cpp_method_get_param" );
         method_get_param_name = ( method_get_param_name_t ) dlsym( handle, "il2cpp_method_get_param_name" );
         method_get_return_type = ( method_get_return_type_t ) dlsym( handle, "il2cpp_method_get_return_type" );
-        method_get_pointer = ( method_get_pointer_t ) dlsym( handle, "il2cpp_method_get_pointer" );
+        method_get_pointer = nullptr;
 
         type_get_name =
             ( type_get_name_t ) dlsym( handle, "il2cpp_type_get_name" );
         class_get_type_token = ( class_get_type_token_t ) dlsym( handle, "il2cpp_class_get_type_token" );
 
-        thread_attach =
-            ( thread_attach_t ) dlsym( handle, "il2cpp_thread_attach" );
-        thread_detach =
-            ( thread_detach_t ) dlsym( handle, "il2cpp_thread_detach" );
+        thread_attach = nullptr;
+        thread_detach = nullptr;
 
-        custom_attrs_from_class = ( custom_attrs_from_class_t ) dlsym( handle, "il2cpp_custom_attrs_from_class" );
-        custom_attrs_from_method = ( custom_attrs_from_method_t ) dlsym( handle, "il2cpp_custom_attrs_from_method" );
-        custom_attrs_from_field = ( custom_attrs_from_field_t ) dlsym( handle, "il2cpp_custom_attrs_from_field" );
-        custom_attrs_free =
-            ( custom_attrs_free_t ) dlsym( handle, "il2cpp_custom_attrs_free" );
+        custom_attrs_from_class = nullptr;
+        custom_attrs_from_method = nullptr;
+        custom_attrs_from_field = nullptr;
+        custom_attrs_free = nullptr;
 
         field_get_token =
             ( field_get_token_t ) dlsym( handle, "il2cpp_field_get_token" );
-        field_static_get_value = ( field_static_get_value_t ) dlsym( handle, "il2cpp_field_static_get_value" );
-        field_get_default_value = ( field_get_default_value_t ) dlsym( handle, "il2cpp_field_get_default_value" );
+        field_static_get_value = nullptr;
+        field_get_default_value = nullptr;
 
         method_get_token =
             ( method_get_token_t ) dlsym( handle, "il2cpp_method_get_token" );
@@ -459,8 +456,7 @@ namespace api {
             ( method_is_generic_t ) dlsym( handle, "il2cpp_method_is_generic" );
         method_is_inflated = ( method_is_inflated_t ) dlsym( handle, "il2cpp_method_is_inflated" );
 
-        class_from_name =
-            ( class_from_name_t ) dlsym( handle, "il2cpp_class_from_name" );
+        class_from_name = nullptr;
         class_instance_size = ( class_instance_size_t ) dlsym( handle, "il2cpp_class_instance_size" );
         class_value_size =
             ( class_value_size_t ) dlsym( handle, "il2cpp_class_value_size" );
@@ -482,33 +478,25 @@ namespace api {
         event_get_remove_method = ( event_get_remove_method_t ) dlsym( handle, "il2cpp_event_get_remove_method" );
         event_get_raise_method = ( event_get_raise_method_t ) dlsym( handle, "il2cpp_event_get_raise_method" );
 
-        // Runtime invocation suite (for live scene dumper)
-        class_get_method_from_name = ( class_get_method_from_name_t ) dlsym( handle, "il2cpp_class_get_method_from_name" );
-        runtime_invoke =
-            ( runtime_invoke_t ) dlsym( handle, "il2cpp_runtime_invoke" );
-        type_get_object =
-            ( type_get_object_t ) dlsym( handle, "il2cpp_type_get_object" );
-        class_get_type =
-            ( class_get_type_t ) dlsym( handle, "il2cpp_class_get_type" );
-        array_length = ( array_length_t ) dlsym( handle, "il2cpp_array_length" );
-        string_length_fn =
-            ( string_length_t ) dlsym( handle, "il2cpp_string_length" );
-        string_chars = ( string_chars_t ) dlsym( handle, "il2cpp_string_chars" );
-        object_unbox = ( object_unbox_t ) dlsym( handle, "il2cpp_object_unbox" );
-        field_get_value =
-            ( field_get_value_t ) dlsym( handle, "il2cpp_field_get_value" );
-        class_get_field_from_name = ( class_get_field_from_name_t ) dlsym( handle, "il2cpp_class_get_field_from_name" );
+        class_get_method_from_name = nullptr;
+        runtime_invoke = nullptr;
+        type_get_object = nullptr;
+        class_get_type = nullptr;
+        array_length = nullptr;
+        string_length_fn = nullptr;
+        string_chars = nullptr;
+        object_unbox = nullptr;
+        field_get_value = nullptr;
+        class_get_field_from_name = nullptr;
 
-        gc_register_my_thread =
-            ( gc_register_my_thread_t ) dlsym( handle, "GC_register_my_thread" );
-        gc_unregister_my_thread = ( gc_unregister_my_thread_t ) dlsym( handle, "GC_unregister_my_thread" );
-        gc_disable = ( gc_disable_t ) dlsym( handle, "il2cpp_gc_disable" );
-        gc_enable = ( gc_enable_t ) dlsym( handle, "il2cpp_gc_enable" );
-        gc_is_disabled =
-            ( gc_is_disabled_t ) dlsym( handle, "il2cpp_gc_is_disabled" );
-        gc_disable_boehm = ( gc_disable_boehm_t ) dlsym( handle, "GC_disable" );
-        gc_enable_boehm = ( gc_enable_boehm_t ) dlsym( handle, "GC_enable" );
-        gc_dont_gc_ptr = ( int * ) dlsym( handle, "GC_dont_gc" );
+        gc_register_my_thread = nullptr;
+        gc_unregister_my_thread = nullptr;
+        gc_disable = nullptr;
+        gc_enable = nullptr;
+        gc_is_disabled = nullptr;
+        gc_disable_boehm = nullptr;
+        gc_enable_boehm = nullptr;
+        gc_dont_gc_ptr = nullptr;
 
         if ( !get_domain || !get_assemblies || !assembly_get_image ||
             !image_get_name ) {
@@ -526,7 +514,7 @@ namespace api {
         char diag [ 640 ];
         sprintf_s(
             diag,
-            "[diag] gc_register=%s gc_disable=%s gc_enable=%s "
+            "[diag] safe_mode=yes gc_register=%s gc_disable=%s gc_enable=%s "
             "GC_disable=%s GC_enable=%s GC_dont_gc=%s "
             "props=%s events=%s field_default=%s method_token=%s "
             "runtime_invoke=%s class_from_name=%s",

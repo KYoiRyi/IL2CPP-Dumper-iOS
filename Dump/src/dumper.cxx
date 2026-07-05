@@ -17,12 +17,14 @@ Dumper::Dumper( ) {
         return;
     }
 
+    Log( "[safe] resolving IL2CPP domain" );
     void * domain = api::get_domain( );
     if ( !domain ) {
         Log( "[ERROR] No domain" );
         return;
     }
 
+    Log( "[safe] reading IL2CPP assemblies" );
     size_t count = 0;
     void ** assemblies = api::get_assemblies( domain, &count );
     if ( !assemblies || count == 0 ) {
@@ -30,6 +32,7 @@ Dumper::Dumper( ) {
         return;
     }
 
+    Log( "[safe] caching assembly images: " + std::to_string( count ) );
     for ( size_t i = 0; i < count; ++i ) {
         void * ass = assemblies [ i ];
         if ( !ass )
