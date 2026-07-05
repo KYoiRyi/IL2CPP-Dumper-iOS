@@ -7,8 +7,8 @@
 #include <fstream>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach/mach.h>
 #include <mach/vm_region.h>
-#include <mach/mach_vm.h>
 
 namespace api {
 
@@ -114,13 +114,13 @@ namespace api {
             if ( !address || !size )
                 return false;
 
-            mach_vm_address_t region = static_cast< mach_vm_address_t >( address );
-            mach_vm_size_t regionSize = 0;
+            vm_address_t region = static_cast< vm_address_t >( address );
+            vm_size_t regionSize = 0;
             vm_region_basic_info_data_64_t info {};
             mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
             mach_port_t objectName = MACH_PORT_NULL;
 
-            kern_return_t kr = mach_vm_region(
+            kern_return_t kr = vm_region_64(
                 mach_task_self( ), &region, &regionSize, VM_REGION_BASIC_INFO_64,
                 reinterpret_cast< vm_region_info_t >( &info ), &count, &objectName );
             if ( kr != KERN_SUCCESS )
