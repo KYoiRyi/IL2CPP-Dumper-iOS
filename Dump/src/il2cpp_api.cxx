@@ -1,4 +1,5 @@
 #include "../include/il2cpp_api.hxx"
+#include "../include/metadata_dumper.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
 #include <cstring>
@@ -235,6 +236,7 @@ namespace api {
             sprintf_s( buf, "[metadata] dumped %zu bytes from %s -> %s",
                 written, source.c_str( ), path.c_str( ) );
             Log( buf );
+            DumpMetadataCsFromFile( path, g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir );
             return true;
         }
 

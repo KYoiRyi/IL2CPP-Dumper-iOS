@@ -11,6 +11,7 @@ IL2CPPDumper_FILES = \
 	Dump/src/main.cxx \
 	Dump/src/platform.cxx \
 	Dump/src/utils.cxx \
+	Dump/src/metadata_dumper.cxx \
 	Dump/src/il2cpp_api.cxx \
 	Dump/src/il2cpp_image.cxx \
 	Dump/src/il2cpp_class.cxx \
