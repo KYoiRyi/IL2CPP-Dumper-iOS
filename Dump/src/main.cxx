@@ -7,14 +7,16 @@
 #include <pthread.h>
 #include <string>
 
-static void * g_il2cppThread = nullptr;
-
 static bool EnvEnabled( const char * name ) {
     const char * value = std::getenv( name );
     if ( !value )
         return false;
     std::string s = value;
     return s == "1" || s == "true" || s == "TRUE" || s == "yes" || s == "YES";
+}
+
+static bool UnsafeRuntimeEnabled( ) {
+    return EnvEnabled( "IL2CPP_DUMPER_UNSAFE_RUNTIME" );
 }
 
 static bool WaitForIl2CppReady( ) {
@@ -55,71 +57,6 @@ static bool WaitForIl2CppReady( ) {
     return true;
 }
 
-static void AttachIl2CppThread( ) {
-    if ( g_il2cppThread || !api::thread_attach || !api::get_domain )
-        return;
-
-    void * domain = api::get_domain( );
-    if ( !domain )
-        return;
-
-    for ( int attempt = 0; attempt < 3 && !g_il2cppThread; ++attempt ) {
-        if ( attempt > 0 ) {
-            Log( "attach retry " + std::to_string( attempt ) );
-            Sleep( 3000 );
-        }
-
-        int savedDontGc = -1;
-        bool usedBoehmFn = false;
-        bool usedIl2cppFn = false;
-
-        if ( api::gc_dont_gc_ptr ) {
-            try {
-                savedDontGc = *api::gc_dont_gc_ptr;
-                *api::gc_dont_gc_ptr = savedDontGc + 1;
-            }
-            catch ( ... ) {
-                savedDontGc = -1;
-            }
-        }
-        if ( savedDontGc < 0 && api::gc_disable_boehm ) {
-            try {
-                api::gc_disable_boehm( );
-                usedBoehmFn = true;
-            }
-            catch ( ... ) {
-                usedBoehmFn = false;
-            }
-        }
-        if ( savedDontGc < 0 && !usedBoehmFn && api::gc_disable ) {
-            try {
-                api::gc_disable( );
-                usedIl2cppFn = true;
-            }
-            catch ( ... ) {
-                usedIl2cppFn = false;
-            }
-        }
-
-        try {
-            g_il2cppThread = api::thread_attach( domain );
-        }
-        catch ( ... ) {
-            g_il2cppThread = nullptr;
-        }
-
-        if ( savedDontGc >= 0 && api::gc_dont_gc_ptr )
-            *api::gc_dont_gc_ptr = savedDontGc;
-        if ( usedBoehmFn && api::gc_enable_boehm )
-            api::gc_enable_boehm( );
-        if ( usedIl2cppFn && api::gc_enable )
-            api::gc_enable( );
-    }
-
-    Log( g_il2cppThread ? "thread attached to IL2CPP runtime"
-        : "thread attach failed; live scene dumping is unsafe" );
-}
-
 static void * EntryPoint( void * ) {
     const char * outputDir = std::getenv( "IL2CPP_DUMPER_OUTPUT" );
     g_outputDir = ( outputDir && *outputDir ) ? outputDir : DefaultOutputDir( );
@@ -128,7 +65,7 @@ static void * EntryPoint( void * ) {
     Log( "iOS tweak loaded. Waiting for IL2CPP runtime..." );
 
     if ( WaitForIl2CppReady( ) ) {
-        AttachIl2CppThread( );
+        Log( "safe mode: no thread attach, no GC changes, no runtime invoke" );
 
         {
             Dumper dumper;
@@ -141,18 +78,13 @@ static void * EntryPoint( void * ) {
             }
         }
 
-        if ( EnvEnabled( "IL2CPP_DUMPER_SCENE" ) ) {
+        if ( UnsafeRuntimeEnabled( ) && EnvEnabled( "IL2CPP_DUMPER_SCENE" ) ) {
             SceneDumper::Initialize( );
             if ( SceneDumper::Ready( ) ) {
                 if ( EnvEnabled( "IL2CPP_DUMPER_DEEP_SCENE" ) )
                     SceneDumper::SetDeepFieldDump( true );
                 SceneDumper::DumpAll( );
             }
-        }
-
-        if ( g_il2cppThread && api::thread_detach ) {
-            api::thread_detach( g_il2cppThread );
-            g_il2cppThread = nullptr;
         }
     }
 

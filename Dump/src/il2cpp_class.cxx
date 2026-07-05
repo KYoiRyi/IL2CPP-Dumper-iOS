@@ -2,6 +2,15 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
+#include <cstdlib>
+
+static bool UnsafeRuntimeEnabled( ) {
+    const char * value = std::getenv( "IL2CPP_DUMPER_UNSAFE_RUNTIME" );
+    if ( !value )
+        return false;
+    std::string s = value;
+    return s == "1" || s == "true" || s == "TRUE" || s == "yes" || s == "YES";
+}
 
 static std::vector<std::string> ParseAttrCache( void * cache ) {
     std::vector<std::string> result;
@@ -162,6 +171,8 @@ std::vector<EventData> Il2CppClass::GetEvents( ) const {
 }
 
 std::vector<std::string> Il2CppClass::GetAttributes( ) const {
+    if ( !UnsafeRuntimeEnabled( ) )
+        return {};
     if ( !klass || !api::custom_attrs_from_class )
         return {};
     void * cache = nullptr;
@@ -253,7 +264,7 @@ std::vector<FieldData> Il2CppClass::GetFields( ) const {
             ftype && api::type_get_name ? api::type_get_name( ftype ) : nullptr;
         fd.type = tname ? tname : "object";
 
-        if ( api::custom_attrs_from_field ) {
+        if ( UnsafeRuntimeEnabled( ) && api::custom_attrs_from_field ) {
             void * cache = nullptr;
             try {
                 cache = api::custom_attrs_from_field( klass, field );
@@ -346,7 +357,7 @@ std::vector<MethodData> Il2CppClass::GetMethods( ) const {
             tryAddr( a );
         }
 
-        if ( !md.address ) {
+        if ( !md.address && UnsafeRuntimeEnabled( ) ) {
             try {
                 uintptr_t a = *reinterpret_cast< uintptr_t * >( method );
                 tryAddr( a );
@@ -359,7 +370,7 @@ std::vector<MethodData> Il2CppClass::GetMethods( ) const {
         if ( md.rva )
             ++g_rvaResolved;
 
-        if ( api::custom_attrs_from_method ) {
+        if ( UnsafeRuntimeEnabled( ) && api::custom_attrs_from_method ) {
             void * cache = nullptr;
             try {
                 cache = api::custom_attrs_from_method( method );

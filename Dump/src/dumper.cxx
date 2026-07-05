@@ -2,6 +2,7 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
+#include <cstdlib>
 #include <dirent.h>
 #include <fstream>
 #include <iomanip>
@@ -135,6 +136,14 @@ static std::string MethodNoCodeReason( const MethodData & m ) {
 
 static std::string FormatFieldOffset( const FieldData & f );
 static bool ReadLiteralInt( const FieldData & f, int64_t & out );
+
+static bool UnsafeRuntimeEnabled( ) {
+    const char * value = std::getenv( "IL2CPP_DUMPER_UNSAFE_RUNTIME" );
+    if ( !value )
+        return false;
+    std::string s = value;
+    return s == "1" || s == "true" || s == "TRUE" || s == "yes" || s == "YES";
+}
 
 // abstract+sealed = static class. Interfaces are abstract by definition.
 static std::string ClassTypeModifiers( const CachedClass & cls ) {
@@ -494,6 +503,8 @@ void Dumper::DumpAssemblyAi(
 }
 
 static bool ReadLiteralInt( const FieldData & f, int64_t & out ) {
+    if ( !UnsafeRuntimeEnabled( ) )
+        return false;
     if ( !( f.flags & FA_LITERAL ) )
         return false;
     if ( !api::field_get_default_value || !f.raw )
@@ -620,6 +631,8 @@ void Dumper::DumpStringLiterals(
     const std::string & asmName,
     const std::map<std::string, std::vector<CachedClass>> & nsClasses,
     std::ofstream & out, std::size_t & counter ) {
+    if ( !UnsafeRuntimeEnabled( ) )
+        return;
     if ( !api::field_static_get_value )
         return;
 
