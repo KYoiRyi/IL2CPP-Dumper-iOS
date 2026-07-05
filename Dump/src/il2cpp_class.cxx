@@ -339,32 +339,7 @@ std::vector<MethodData> Il2CppClass::GetMethods( ) const {
         md.address = 0;
         md.rva = 0;
 
-        auto tryAddr = [ & ] ( uintptr_t addr ) -> bool {
-            if ( !addr || !api::module_base )
-                return false;
-            if ( addr < api::module_base )
-                return false;
-            if ( api::module_size && addr >= api::module_base + api::module_size )
-                return false;
-            md.address = addr;
-            md.rva = static_cast< uint64_t >( addr - api::module_base );
-            return true;
-            };
-
-        if ( api::method_get_pointer ) {
-            uintptr_t a =
-                reinterpret_cast< uintptr_t >( api::method_get_pointer( method ) );
-            tryAddr( a );
-        }
-
-        if ( !md.address && UnsafeRuntimeEnabled( ) ) {
-            try {
-                uintptr_t a = *reinterpret_cast< uintptr_t * >( method );
-                tryAddr( a );
-            }
-            catch ( ... ) {
-            }
-        }
+        api::resolve_method_rva( method, md.address, md.rva );
 
         ++g_rvaTotal;
         if ( md.rva )

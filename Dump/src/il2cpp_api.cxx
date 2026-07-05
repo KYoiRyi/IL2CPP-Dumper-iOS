@@ -17,6 +17,8 @@ namespace api {
     bool initialized = false;
     uintptr_t module_base = 0;
     size_t module_size = 0;
+    uintptr_t executable_base = 0;
+    size_t executable_size = 0;
 
     // function pointers
     get_domain_t get_domain = nullptr;
@@ -164,6 +166,11 @@ namespace api {
                 reinterpret_cast< vm_address_t >( out ),
                 &copied );
             return kr == KERN_SUCCESS && copied == size;
+        }
+
+        bool SafeReadPtr( uintptr_t address, uintptr_t & out ) {
+            out = 0;
+            return SafeRead( address, &out, sizeof( out ) );
         }
 
         bool ReadU32( uintptr_t address, uint32_t & out ) {
@@ -332,10 +339,85 @@ namespace api {
         void * ResolveSymbol( void * handle, const char * name ) {
             return dlsym( handle, name );
         }
+
+        bool AddressInRange( uintptr_t addr, uintptr_t base, size_t size ) {
+            return addr && base && addr >= base && ( !size || addr < base + size );
+        }
+
+        void CaptureExecutableRange( ) {
+            uintptr_t minStart = UINTPTR_MAX;
+            uintptr_t maxEnd = 0;
+            for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
+                const auto * header = _dyld_get_image_header( i );
+                const intptr_t slide = _dyld_get_image_vmaddr_slide( i );
+                if ( !header || header->magic != MH_MAGIC_64 )
+                    continue;
+
+                const uint8_t * cmdPtr = reinterpret_cast< const uint8_t * >( header ) +
+                    sizeof( mach_header_64 );
+                for ( uint32_t c = 0; c < header->ncmds; ++c ) {
+                    const auto * cmd = reinterpret_cast< const load_command * >( cmdPtr );
+                    if ( cmd->cmd == LC_SEGMENT_64 ) {
+                        const auto * seg = reinterpret_cast< const segment_command_64 * >( cmd );
+                        if ( ( seg->initprot & VM_PROT_EXECUTE ) != 0 && seg->vmsize ) {
+                            uintptr_t start = static_cast< uintptr_t >( seg->vmaddr + slide );
+                            uintptr_t end = start + static_cast< uintptr_t >( seg->vmsize );
+                            minStart = std::min( minStart, start );
+                            maxEnd = std::max( maxEnd, end );
+                        }
+                    }
+                    cmdPtr += cmd->cmdsize;
+                }
+            }
+
+            if ( minStart != UINTPTR_MAX && maxEnd > minStart ) {
+                executable_base = minStart;
+                executable_size = maxEnd - minStart;
+            }
+        }
     }
 
     bool try_dump_metadata_fallback( ) {
         return TryDumpRuntimeMetadataFallback( );
+    }
+
+    bool resolve_method_rva( void * method, uintptr_t & address, uint64_t & rva ) {
+        address = 0;
+        rva = 0;
+        if ( !method )
+            return false;
+
+        auto accept = [ & ] ( uintptr_t candidate ) -> bool {
+            if ( !candidate )
+                return false;
+            uintptr_t base = 0;
+            if ( AddressInRange( candidate, module_base, module_size ) )
+                base = module_base;
+            else if ( AddressInRange( candidate, executable_base, executable_size ) )
+                base = executable_base;
+            else
+                return false;
+
+            address = candidate;
+            rva = static_cast< uint64_t >( candidate - base );
+            return true;
+        };
+
+        if ( method_get_pointer ) {
+            uintptr_t candidate =
+                reinterpret_cast< uintptr_t >( method_get_pointer( method ) );
+            if ( accept( candidate ) )
+                return true;
+        }
+
+        uintptr_t methodAddr = reinterpret_cast< uintptr_t >( method );
+        for ( size_t off = 0; off <= sizeof( uintptr_t ) * 3; off += sizeof( uintptr_t ) ) {
+            uintptr_t candidate = 0;
+            if ( SafeReadPtr( methodAddr + off, candidate ) && accept( candidate ) )
+                return true;
+        }
+
+        return false;
     }
 
     void init( ) {
@@ -349,6 +431,8 @@ namespace api {
             Log( "[ERROR] il2cpp_domain_get not found in the current process" );
             return;
         }
+
+        CaptureExecutableRange( );
 
         uintptr_t domainAddr = reinterpret_cast< uintptr_t >( domainSym );
         for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
@@ -515,6 +599,12 @@ namespace api {
         sprintf_s( buf, "[OK] IL2CPP API ready  base=0x%llX  size=0x%zX",
             ( unsigned long long )module_base, module_size );
         Log( buf );
+
+        char execBuf [ 128 ];
+        sprintf_s( execBuf, "[diag] executable range base=0x%llX size=0x%zX method_ptr=%s",
+            ( unsigned long long )executable_base, executable_size,
+            method_get_pointer ? "yes" : "NO" );
+        Log( execBuf );
 
         char diag [ 640 ];
         sprintf_s(

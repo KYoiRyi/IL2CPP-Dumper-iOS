@@ -10,6 +10,8 @@ namespace api {
     extern bool initialized;
     extern uintptr_t module_base;
     extern size_t module_size;
+    extern uintptr_t executable_base;
+    extern size_t executable_size;
 
     // function pointer types
     typedef void * ( __fastcall * get_domain_t )( );
@@ -209,6 +211,7 @@ namespace api {
 
     void init( );
     bool try_dump_metadata_fallback( );
+    bool resolve_method_rva( void * method, uintptr_t & address, uint64_t & rva );
 
 }
 
