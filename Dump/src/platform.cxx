@@ -2,8 +2,6 @@
 
 #include <cerrno>
 #include <climits>
-#include <codecvt>
-#include <locale>
 #include <mach/mach.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -31,10 +29,44 @@ std::string Utf16ToUtf8( const void * chars, int len ) {
     if ( !chars || len <= 0 )
         return "";
 
-    const auto * begin = static_cast< const char16_t * >( chars );
-    std::u16string src( begin, begin + len );
-    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conv;
-    return conv.to_bytes( src );
+    const auto * src = static_cast< const char16_t * >( chars );
+    std::string out;
+    out.reserve( static_cast< size_t >( len ) * 3 );
+
+    auto appendCodepoint = [ &out ] ( uint32_t cp ) {
+        if ( cp <= 0x7F ) {
+            out.push_back( static_cast< char >( cp ) );
+        }
+        else if ( cp <= 0x7FF ) {
+            out.push_back( static_cast< char >( 0xC0 | ( cp >> 6 ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( cp & 0x3F ) ) );
+        }
+        else if ( cp <= 0xFFFF ) {
+            out.push_back( static_cast< char >( 0xE0 | ( cp >> 12 ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( ( cp >> 6 ) & 0x3F ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( cp & 0x3F ) ) );
+        }
+        else {
+            out.push_back( static_cast< char >( 0xF0 | ( cp >> 18 ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( ( cp >> 12 ) & 0x3F ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( ( cp >> 6 ) & 0x3F ) ) );
+            out.push_back( static_cast< char >( 0x80 | ( cp & 0x3F ) ) );
+        }
+    };
+
+    for ( int i = 0; i < len; ++i ) {
+        uint32_t cp = src [ i ];
+        if ( cp >= 0xD800 && cp <= 0xDBFF && i + 1 < len ) {
+            uint32_t low = src [ i + 1 ];
+            if ( low >= 0xDC00 && low <= 0xDFFF ) {
+                cp = 0x10000 + ( ( cp - 0xD800 ) << 10 ) + ( low - 0xDC00 );
+                ++i;
+            }
+        }
+        appendCodepoint( cp );
+    }
+
+    return out;
 }
 
 unsigned int HardwareCpuCount( ) {
