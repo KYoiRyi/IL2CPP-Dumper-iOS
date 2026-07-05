@@ -350,14 +350,16 @@ namespace api {
             return;
         }
 
+        uintptr_t domainAddr = reinterpret_cast< uintptr_t >( domainSym );
         for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
             const auto * header = _dyld_get_image_header( i );
             const intptr_t slide = _dyld_get_image_vmaddr_slide( i );
             if ( !header )
                 continue;
 
-            uintptr_t imageBase = reinterpret_cast< uintptr_t >( header );
-            uintptr_t imageEnd = imageBase;
+            bool foundImage = false;
+            uintptr_t imageBase = 0;
+            uintptr_t imageEnd = 0;
             const uint8_t * cmdPtr = reinterpret_cast< const uint8_t * >( header ) +
                 sizeof( mach_header_64 );
             for ( uint32_t c = 0; c < header->ncmds; ++c ) {
@@ -366,16 +368,17 @@ namespace api {
                     const auto * seg = reinterpret_cast< const segment_command_64 * >( cmd );
                     uintptr_t start = static_cast< uintptr_t >( seg->vmaddr + slide );
                     uintptr_t end = start + static_cast< uintptr_t >( seg->vmsize );
-                    if ( start <= reinterpret_cast< uintptr_t >( domainSym ) &&
-                        reinterpret_cast< uintptr_t >( domainSym ) < end ) {
-                        module_base = imageBase;
-                    }
-                    if ( module_base )
+                    if ( std::strncmp( seg->segname, "__TEXT", 16 ) == 0 )
+                        imageBase = start;
+                    if ( start <= domainAddr && domainAddr < end )
+                        foundImage = true;
+                    if ( imageBase )
                         imageEnd = std::max( imageEnd, end );
                 }
                 cmdPtr += cmd->cmdsize;
             }
-            if ( module_base ) {
+            if ( foundImage && imageBase ) {
+                module_base = imageBase;
                 module_size = imageEnd > module_base ? imageEnd - module_base : 0;
                 break;
             }
@@ -433,7 +436,7 @@ namespace api {
             ( method_get_param_t ) dlsym( handle, "il2cpp_method_get_param" );
         method_get_param_name = ( method_get_param_name_t ) dlsym( handle, "il2cpp_method_get_param_name" );
         method_get_return_type = ( method_get_return_type_t ) dlsym( handle, "il2cpp_method_get_return_type" );
-        method_get_pointer = nullptr;
+        method_get_pointer = ( method_get_pointer_t ) dlsym( handle, "il2cpp_method_get_pointer" );
 
         type_get_name =
             ( type_get_name_t ) dlsym( handle, "il2cpp_type_get_name" );

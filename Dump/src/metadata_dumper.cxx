@@ -247,6 +247,63 @@ namespace {
         return "";
     }
 
+    bool WriteStringFallback( const std::vector<uint8_t> & data,
+        const std::string & outputBaseDir, const std::string & reason ) {
+        std::string dir = JoinPath( outputBaseDir, "IL2CPP_Metadata_Fallback" );
+        EnsureDirectory( dir );
+        std::string path = JoinPath( dir, "dump.cs" );
+        std::ofstream out( path, std::ios::out | std::ios::trunc );
+        if ( !out.is_open( ) ) {
+            Log( "[metadata-cs] failed to create " + path );
+            return false;
+        }
+
+        out << "// ========================================================\n";
+        out << "// Metadata-only IL2CPP dump\n";
+        out << "// Table parser fallback: " << reason << "\n";
+        out << "// The metadata header/table layout did not match this Unity build.\n";
+        out << "// This file lists plausible metadata identifiers instead of raw .dat only.\n";
+        out << "// ========================================================\n\n";
+        out << "namespace IL2CPP_Metadata_Fallback\n{\n";
+        out << "    public static class MetadataStrings\n    {\n";
+
+        size_t count = 0;
+        std::string current;
+        auto flush = [ & ] {
+            if ( current.size( ) < 3 )
+                return;
+            bool hasAlpha = false;
+            for ( char c : current ) {
+                if ( std::isalpha( static_cast<unsigned char>( c ) ) ) {
+                    hasAlpha = true;
+                    break;
+                }
+            }
+            if ( !hasAlpha )
+                return;
+            out << "        // " << current << "\n";
+            ++count;
+        };
+
+        for ( uint8_t b : data ) {
+            if ( b >= 0x20 && b < 0x7F ) {
+                if ( current.size( ) < 240 )
+                    current.push_back( static_cast<char>( b ) );
+            }
+            else {
+                flush( );
+                current.clear( );
+            }
+        }
+        flush( );
+
+        out << "    }\n}\n";
+        out.close( );
+        Log( "[metadata-cs] wrote string fallback C# dump: " + path );
+        Log( "[metadata-cs] strings: " + std::to_string( count ) );
+        return count > 0;
+    }
+
     void WriteType( std::ofstream & out, const std::vector<uint8_t> & data,
         const MetadataHeader & h, const TypeDefinition & t,
         const std::vector<FieldDefinition> & fields,
@@ -320,15 +377,21 @@ bool DumpMetadataCsFromFile( const std::string & metadataPath,
         ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>( ) );
     if ( data.size( ) < sizeof( MetadataHeader ) ) {
         Log( "[metadata-cs] metadata file is too small" );
-        return false;
+        return WriteStringFallback( data, outputBaseDir, "metadata file is too small" );
     }
 
     MetadataHeader h {};
     std::memcpy( &h, data.data( ), sizeof( h ) );
     if ( h.sanity != kMetadataMagic ) {
         Log( "[metadata-cs] metadata magic mismatch" );
-        return false;
+        return WriteStringFallback( data, outputBaseDir, "metadata magic mismatch" );
     }
+
+    char hdr [ 256 ];
+    sprintf_s( hdr, "[metadata-cs] version=%d strings=%u types=%u images=%u methods=%u fields=%u",
+        h.version, h.stringCount, h.typeDefinitionsCount, h.imagesCount,
+        h.methodsCount, h.fieldsCount );
+    Log( hdr );
 
     std::vector<ImageDefinition> images;
     std::vector<TypeDefinition> types;
@@ -341,7 +404,7 @@ bool DumpMetadataCsFromFile( const std::string & metadataPath,
         !ReadTable( data, h.methodsOffset, h.methodsCount, methods ) ||
         !ReadTable( data, h.parametersOffset, h.parametersCount, params ) ) {
         Log( "[metadata-cs] metadata table bounds failed" );
-        return false;
+        return WriteStringFallback( data, outputBaseDir, "metadata table bounds failed" );
     }
 
     std::string dir = JoinPath( outputBaseDir, "IL2CPP_Metadata_Fallback" );
@@ -383,5 +446,7 @@ bool DumpMetadataCsFromFile( const std::string & metadataPath,
     out.close( );
     Log( "[metadata-cs] wrote fallback C# dump: " + path );
     Log( "[metadata-cs] types: " + std::to_string( writtenTypes ) );
-    return writtenTypes > 0;
+    if ( writtenTypes == 0 )
+        return WriteStringFallback( data, outputBaseDir, "no type definitions emitted" );
+    return true;
 }
