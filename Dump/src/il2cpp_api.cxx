@@ -1,10 +1,14 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
+#include <cstring>
 #include <cstdio>
 #include <dlfcn.h>
+#include <fstream>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach/vm_region.h>
+#include <mach/mach_vm.h>
 
 namespace api {
 
@@ -101,15 +105,175 @@ namespace api {
     gc_enable_boehm_t gc_enable_boehm = nullptr;
     int * gc_dont_gc_ptr = nullptr;
 
+    namespace {
+        constexpr uint32_t kMetadataMagic = 0xFAB11BAF;
+        constexpr size_t kMinMetadataSize = 0x1000;
+        constexpr size_t kMaxMetadataDumpSize = 512ULL * 1024ULL * 1024ULL;
+
+        bool IsReadableRange( uintptr_t address, size_t size, size_t * regionLeft = nullptr ) {
+            if ( !address || !size )
+                return false;
+
+            mach_vm_address_t region = static_cast< mach_vm_address_t >( address );
+            mach_vm_size_t regionSize = 0;
+            vm_region_basic_info_data_64_t info {};
+            mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+            mach_port_t objectName = MACH_PORT_NULL;
+
+            kern_return_t kr = mach_vm_region(
+                mach_task_self( ), &region, &regionSize, VM_REGION_BASIC_INFO_64,
+                reinterpret_cast< vm_region_info_t >( &info ), &count, &objectName );
+            if ( kr != KERN_SUCCESS )
+                return false;
+
+            uintptr_t start = static_cast< uintptr_t >( region );
+            uintptr_t end = start + static_cast< uintptr_t >( regionSize );
+            if ( address < start || size > end - address )
+                return false;
+            if ( ( info.protection & VM_PROT_READ ) == 0 )
+                return false;
+
+            if ( regionLeft )
+                *regionLeft = end - address;
+            return true;
+        }
+
+        bool ReadU32( uintptr_t address, uint32_t & out ) {
+            if ( !IsReadableRange( address, sizeof( out ) ) )
+                return false;
+            std::memcpy( &out, reinterpret_cast< const void * >( address ), sizeof( out ) );
+            return true;
+        }
+
+        bool IsMetadataPointer( uintptr_t ptr ) {
+            uint32_t magic = 0;
+            return ReadU32( ptr, magic ) && magic == kMetadataMagic;
+        }
+
+        size_t EstimateMetadataSize( uintptr_t metadata, size_t regionLeft ) {
+            size_t result = 0;
+            if ( !IsReadableRange( metadata, 512 ) )
+                return std::min( regionLeft, kMaxMetadataDumpSize );
+
+            const auto * words = reinterpret_cast< const uint32_t * >( metadata );
+            for ( int i = 2; i + 1 < 128; i += 2 ) {
+                uint32_t offset = words [ i ];
+                uint32_t size = words [ i + 1 ];
+                if ( offset < 8 || size == 0 )
+                    continue;
+                if ( offset > kMaxMetadataDumpSize || size > kMaxMetadataDumpSize )
+                    continue;
+                result = std::max( result, static_cast< size_t >( offset ) + size );
+            }
+
+            if ( result < kMinMetadataSize )
+                result = std::min( regionLeft, kMaxMetadataDumpSize );
+            return std::min( result, std::min( regionLeft, kMaxMetadataDumpSize ) );
+        }
+
+        bool DumpMetadataBuffer( uintptr_t metadata, const std::string & source ) {
+            size_t regionLeft = 0;
+            if ( !IsReadableRange( metadata, kMinMetadataSize, &regionLeft ) )
+                return false;
+
+            size_t dumpSize = EstimateMetadataSize( metadata, regionLeft );
+            if ( dumpSize < kMinMetadataSize )
+                return false;
+
+            EnsureDirectory( g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir );
+            std::string path = JoinPath(
+                g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir,
+                "global-metadata-dump.dat" );
+
+            std::ofstream out( path, std::ios::binary | std::ios::out | std::ios::trunc );
+            if ( !out.is_open( ) ) {
+                Log( "[metadata] failed to open " + path );
+                return false;
+            }
+
+            out.write( reinterpret_cast< const char * >( metadata ),
+                static_cast< std::streamsize >( dumpSize ) );
+            out.close( );
+
+            char buf [ 256 ];
+            sprintf_s( buf, "[metadata] dumped %zu bytes from %s -> %s",
+                dumpSize, source.c_str( ), path.c_str( ) );
+            Log( buf );
+            return true;
+        }
+
+        bool SegmentLooksData( const segment_command_64 * seg ) {
+            if ( !seg )
+                return false;
+            std::string name = seg->segname;
+            return name.rfind( "__DATA", 0 ) == 0 || name.rfind( "__AUTH", 0 ) == 0 ||
+                name == "__OBJC" || name == "__CONST";
+        }
+
+        bool TryDumpRuntimeMetadataFallback( ) {
+            static bool attempted = false;
+            if ( attempted )
+                return false;
+            attempted = true;
+
+            Log( "[metadata] il2cpp exports are hidden; scanning Mach-O data pointers" );
+
+            for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
+                const auto * header = _dyld_get_image_header( i );
+                const intptr_t slide = _dyld_get_image_vmaddr_slide( i );
+                const char * imageName = _dyld_get_image_name( i );
+                if ( !header || header->magic != MH_MAGIC_64 )
+                    continue;
+
+                const uint8_t * cmdPtr = reinterpret_cast< const uint8_t * >( header ) +
+                    sizeof( mach_header_64 );
+                for ( uint32_t c = 0; c < header->ncmds; ++c ) {
+                    const auto * cmd = reinterpret_cast< const load_command * >( cmdPtr );
+                    if ( cmd->cmd == LC_SEGMENT_64 ) {
+                        const auto * seg = reinterpret_cast< const segment_command_64 * >( cmd );
+                        if ( SegmentLooksData( seg ) && seg->vmsize >= sizeof( uintptr_t ) ) {
+                            uintptr_t start = static_cast< uintptr_t >( seg->vmaddr + slide );
+                            uintptr_t end = start + static_cast< uintptr_t >( seg->vmsize );
+                            if ( IsReadableRange( start, sizeof( uintptr_t ) ) ) {
+                                for ( uintptr_t p = start; p + sizeof( uintptr_t ) <= end;
+                                    p += sizeof( uintptr_t ) ) {
+                                    uintptr_t candidate = 0;
+                                    std::memcpy( &candidate, reinterpret_cast< const void * >( p ),
+                                        sizeof( candidate ) );
+                                    if ( IsMetadataPointer( candidate ) ) {
+                                        std::string source =
+                                            std::string( imageName ? imageName : "unknown" ) +
+                                            ":" + seg->segname;
+                                        if ( DumpMetadataBuffer( candidate, source ) )
+                                            return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    cmdPtr += cmd->cmdsize;
+                }
+            }
+
+            Log( "[metadata] runtime metadata pointer not found" );
+            return false;
+        }
+
+        void * ResolveSymbol( void * handle, const char * name ) {
+            return dlsym( handle, name );
+        }
+    }
+
     void init( ) {
         if ( initialized ) {
             return;
         }
 
         void * handle = RTLD_DEFAULT;
-        void * domainSym = dlsym( handle, "il2cpp_domain_get" );
+        void * domainSym = ResolveSymbol( handle, "il2cpp_domain_get" );
         if ( !domainSym ) {
             Log( "[ERROR] il2cpp_domain_get not found in the current process" );
+            TryDumpRuntimeMetadataFallback( );
             return;
         }
 
