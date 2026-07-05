@@ -1,0 +1,39 @@
+name: macOS Theos Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install dpkg ldid
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Build package
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          make clean package FINALPACKAGE=1 TARGET=iphone:clang:latest:12.0
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: packages/*.deb
+          if-no-files-found: error

@@ -2,7 +2,7 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
-#include <filesystem>
+#include <dirent.h>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -105,8 +105,6 @@ Dumper::CacheImage( const Il2CppImage & img ) const {
 // TypeAttributes (ECMA-335 II.23.1.15)
 constexpr uint32_t TA_ABSTRACT = 0x00000080;
 constexpr uint32_t TA_SEALED = 0x00000100;
-constexpr uint32_t TA_INTERFACE = 0x00000020;
-constexpr uint32_t TA_VISIBILITY_MASK = 0x00000007;
 // MethodAttributes (ECMA-335 II.23.1.10)
 constexpr uint32_t MA_ABSTRACT = 0x0400;
 constexpr uint32_t MA_PINVOKEIMPL = 0x2000;
@@ -117,9 +115,7 @@ constexpr uint32_t MIA_RUNTIME = 0x0003;
 constexpr uint32_t MIA_INTERNALCALL = 0x1000;
 // FieldAttributes (ECMA-335 II.23.1.5)
 constexpr uint32_t FA_STATIC = 0x0010;
-constexpr uint32_t FA_INITONLY = 0x0020;
 constexpr uint32_t FA_LITERAL = 0x0040;
-constexpr uint32_t FA_HASDEFAULT = 0x8000;
 
 static std::string MethodNoCodeReason( const MethodData & m ) {
     if ( m.flags & MA_ABSTRACT )
@@ -669,14 +665,20 @@ void Dumper::DumpStringLiterals(
 }
 
 static bool DirHasDumpFiles( const std::string & dir ) {
-    namespace fs = std::filesystem;
-    if ( !fs::is_directory( dir ) )
+    DIR * d = opendir( dir.c_str( ) );
+    if ( !d )
         return false;
-    for ( const auto & entry : fs::directory_iterator( dir ) ) {
-        if ( entry.is_regular_file( ) && entry.path( ).extension( ) == ".cs" )
-            return true;
+
+    bool found = false;
+    while ( dirent * entry = readdir( d ) ) {
+        std::string name = entry->d_name;
+        if ( name.size( ) >= 3 && name.compare( name.size( ) - 3, 3, ".cs" ) == 0 ) {
+            found = true;
+            break;
+        }
     }
-    return false;
+    closedir( d );
+    return found;
 }
 
 void Dumper::DumpAllToFiles( ) {

@@ -1,5 +1,5 @@
-ARCHS = arm64 arm64e
-TARGET := iphone:clang:latest:12.0
+ARCHS = arm64
+TARGET := iphone:clang:16.5:12.0
 
 INSTALL_TARGET_PROCESSES ?=
 
@@ -19,6 +19,5 @@ IL2CPPDumper_FILES = \
 
 IL2CPPDumper_CFLAGS = -fobjc-arc -I$(CURDIR)/Dump/include
 IL2CPPDumper_CCFLAGS = -std=c++17 -fno-rtti -I$(CURDIR)/Dump/include
-IL2CPPDumper_LDFLAGS = -ldl
 
 include $(THEOS_MAKE_PATH)/tweak.mk

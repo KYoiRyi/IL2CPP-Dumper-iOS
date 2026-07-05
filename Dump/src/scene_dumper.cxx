@@ -51,7 +51,7 @@ namespace {
         const char * tier = ( g_hwTier == HwTier::LOW ) ? "LOW"
             : ( g_hwTier == HwTier::MID ) ? "MID"
             : "HIGH";
-        sprintf_s( buf, "hardware: %s  cores=%lu  ram=%lluGB  yield=%dms/%d", tier,
+        sprintf_s( buf, "hardware: %s  cores=%u  ram=%lluGB  yield=%dms/%d", tier,
             cores, ramGb, g_yieldMs, g_yieldEveryN );
         Log( buf );
     }

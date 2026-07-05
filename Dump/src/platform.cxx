@@ -11,8 +11,11 @@
 
 std::string DefaultOutputDir( ) {
     const char * home = std::getenv( "HOME" );
+    if ( !home || !*home ) {
+        home = std::getenv( "CFFIXED_USER_HOME" );
+    }
     if ( !home || !*home )
-        home = "/var/mobile";
+        return "/var/mobile/Documents/IL2CPP-Dumper";
     return JoinPath( home, "Documents/IL2CPP-Dumper" );
 }
 

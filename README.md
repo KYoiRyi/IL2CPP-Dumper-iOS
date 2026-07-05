@@ -16,10 +16,10 @@ constructor inside the target app process.
 
 ## Output
 
-By default, files are written to:
+By default, files are written inside the target app sandbox:
 
 ```text
-/var/mobile/Documents/IL2CPP-Dumper
+$HOME/Documents/IL2CPP-Dumper
 ```
 
 Set `IL2CPP_DUMPER_OUTPUT` in the target process environment to override it.
@@ -75,7 +75,8 @@ Environment variables:
 
 - `TARGET_BUNDLE_ID`: replaces the placeholder filter bundle id.
 - `IOS_SDK_VERSION`: selects a specific SDK, for example `16.5`. Defaults to
-  the latest SDK found in the downloaded SDK repository.
+  `16.5`. The build helper installs the larger Swift 5.8 iOS toolchain because
+  the smaller clang-11 toolchain cannot reliably link newer `.tbd` stubs.
 - `THEOS`: uses an existing Theos checkout instead of `.deps/theos`.
 
 The resulting Debian package is written under `packages/`.

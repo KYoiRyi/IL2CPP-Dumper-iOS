@@ -1,6 +1,7 @@
 # Theos and package outputs
 .theos/
 packages/
+build_logs/
 *.deb
 
 # Local dependency cache
