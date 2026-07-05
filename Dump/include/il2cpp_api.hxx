@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "platform.hxx"
 
 namespace api {
 
@@ -101,7 +102,7 @@ namespace api {
 
     typedef int32_t( __fastcall * array_length_t )( void * array );
     typedef int32_t( __fastcall * string_length_t )( void * str );
-    typedef wchar_t * ( __fastcall * string_chars_t )( void * str );
+    typedef char16_t * ( __fastcall * string_chars_t )( void * str );
     typedef void * ( __fastcall * object_unbox_t )( void * obj );
 
     typedef void( __fastcall * field_get_value_t )( void * obj, void * field,

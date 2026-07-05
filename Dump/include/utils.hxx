@@ -2,7 +2,7 @@
 #define UTILS_H
 
 #include <string>
-#include <windows.h>
+#include "platform.hxx"
 
 extern std::string g_outputDir;
 

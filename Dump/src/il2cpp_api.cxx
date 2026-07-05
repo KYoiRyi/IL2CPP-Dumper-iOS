@@ -1,6 +1,10 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
-#include <windows.h>
+#include <algorithm>
+#include <cstdio>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 
 namespace api {
 
@@ -102,182 +106,174 @@ namespace api {
             return;
         }
 
-        HMODULE gameAsm = GetModuleHandleA( "GameAssembly.dll" );
-        if ( !gameAsm ) {
-            Log( "[ERROR] GameAssembly.dll not found" );
+        void * handle = RTLD_DEFAULT;
+        void * domainSym = dlsym( handle, "il2cpp_domain_get" );
+        if ( !domainSym ) {
+            Log( "[ERROR] il2cpp_domain_get not found in the current process" );
             return;
         }
 
-        module_base = reinterpret_cast< uintptr_t >( gameAsm );
+        for ( uint32_t i = 0; i < _dyld_image_count( ); ++i ) {
+            const auto * header = _dyld_get_image_header( i );
+            const intptr_t slide = _dyld_get_image_vmaddr_slide( i );
+            if ( !header )
+                continue;
 
-        // module size from PE headers (for RVA range validation)
-        auto dos = reinterpret_cast< IMAGE_DOS_HEADER * >( gameAsm );
-        if ( dos->e_magic == IMAGE_DOS_SIGNATURE ) {
-            auto nt = reinterpret_cast< IMAGE_NT_HEADERS * >( module_base + dos->e_lfanew );
-            if ( nt->Signature == IMAGE_NT_SIGNATURE ) {
-                module_size = nt->OptionalHeader.SizeOfImage;
+            uintptr_t imageBase = reinterpret_cast< uintptr_t >( header );
+            uintptr_t imageEnd = imageBase;
+            const uint8_t * cmdPtr = reinterpret_cast< const uint8_t * >( header ) +
+                sizeof( mach_header_64 );
+            for ( uint32_t c = 0; c < header->ncmds; ++c ) {
+                const auto * cmd = reinterpret_cast< const load_command * >( cmdPtr );
+                if ( cmd->cmd == LC_SEGMENT_64 ) {
+                    const auto * seg = reinterpret_cast< const segment_command_64 * >( cmd );
+                    uintptr_t start = static_cast< uintptr_t >( seg->vmaddr + slide );
+                    uintptr_t end = start + static_cast< uintptr_t >( seg->vmsize );
+                    if ( start <= reinterpret_cast< uintptr_t >( domainSym ) &&
+                        reinterpret_cast< uintptr_t >( domainSym ) < end ) {
+                        module_base = imageBase;
+                    }
+                    if ( module_base )
+                        imageEnd = std::max( imageEnd, end );
+                }
+                cmdPtr += cmd->cmdsize;
+            }
+            if ( module_base ) {
+                module_size = imageEnd > module_base ? imageEnd - module_base : 0;
+                break;
             }
         }
 
         // Core functions - fail early if missing
-        get_domain = ( get_domain_t ) GetProcAddress( gameAsm, "il2cpp_domain_get" );
+        get_domain = ( get_domain_t ) domainSym;
         get_assemblies =
-            ( get_assemblies_t ) GetProcAddress( gameAsm, "il2cpp_domain_get_assemblies" );
-        assembly_get_image = ( assembly_get_image_t ) GetProcAddress(
-            gameAsm, "il2cpp_assembly_get_image" );
+            ( get_assemblies_t ) dlsym( handle, "il2cpp_domain_get_assemblies" );
+        assembly_get_image = ( assembly_get_image_t ) dlsym( handle, "il2cpp_assembly_get_image" );
         image_get_name =
-            ( image_get_name_t ) GetProcAddress( gameAsm, "il2cpp_image_get_name" );
+            ( image_get_name_t ) dlsym( handle, "il2cpp_image_get_name" );
 
         // class / image enumeration
-        image_get_class_count = ( image_get_class_count_t ) GetProcAddress(
-            gameAsm, "il2cpp_image_get_class_count" );
+        image_get_class_count = ( image_get_class_count_t ) dlsym( handle, "il2cpp_image_get_class_count" );
         image_get_class =
-            ( image_get_class_t ) GetProcAddress( gameAsm, "il2cpp_image_get_class" );
+            ( image_get_class_t ) dlsym( handle, "il2cpp_image_get_class" );
 
         // class reflection
         class_get_name =
-            ( class_get_name_t ) GetProcAddress( gameAsm, "il2cpp_class_get_name" );
-        class_get_namespace = ( class_get_namespace_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_namespace" );
+            ( class_get_name_t ) dlsym( handle, "il2cpp_class_get_name" );
+        class_get_namespace = ( class_get_namespace_t ) dlsym( handle, "il2cpp_class_get_namespace" );
         class_get_flags =
-            ( class_get_flags_t ) GetProcAddress( gameAsm, "il2cpp_class_get_flags" );
+            ( class_get_flags_t ) dlsym( handle, "il2cpp_class_get_flags" );
         class_get_parent =
-            ( class_get_parent_t ) GetProcAddress( gameAsm, "il2cpp_class_get_parent" );
+            ( class_get_parent_t ) dlsym( handle, "il2cpp_class_get_parent" );
 
-        class_is_valuetype = ( class_is_valuetype_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_is_valuetype" );
-        class_is_interface = ( class_is_interface_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_is_interface" );
-        class_get_interfaces = ( class_get_interfaces_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_interfaces" );
+        class_is_valuetype = ( class_is_valuetype_t ) dlsym( handle, "il2cpp_class_is_valuetype" );
+        class_is_interface = ( class_is_interface_t ) dlsym( handle, "il2cpp_class_is_interface" );
+        class_get_interfaces = ( class_get_interfaces_t ) dlsym( handle, "il2cpp_class_get_interfaces" );
 
         // fields
         class_num_fields =
-            ( class_num_fields_t ) GetProcAddress( gameAsm, "il2cpp_class_num_fields" );
+            ( class_num_fields_t ) dlsym( handle, "il2cpp_class_num_fields" );
         class_get_fields =
-            ( class_get_fields_t ) GetProcAddress( gameAsm, "il2cpp_class_get_fields" );
+            ( class_get_fields_t ) dlsym( handle, "il2cpp_class_get_fields" );
         field_get_name =
-            ( field_get_name_t ) GetProcAddress( gameAsm, "il2cpp_field_get_name" );
+            ( field_get_name_t ) dlsym( handle, "il2cpp_field_get_name" );
         field_get_type =
-            ( field_get_type_t ) GetProcAddress( gameAsm, "il2cpp_field_get_type" );
+            ( field_get_type_t ) dlsym( handle, "il2cpp_field_get_type" );
         field_get_flags =
-            ( field_get_flags_t ) GetProcAddress( gameAsm, "il2cpp_field_get_flags" );
+            ( field_get_flags_t ) dlsym( handle, "il2cpp_field_get_flags" );
         field_get_offset =
-            ( field_get_offset_t ) GetProcAddress( gameAsm, "il2cpp_field_get_offset" );
+            ( field_get_offset_t ) dlsym( handle, "il2cpp_field_get_offset" );
 
         // methods
         class_get_methods =
-            ( class_get_methods_t ) GetProcAddress( gameAsm, "il2cpp_class_get_methods" );
+            ( class_get_methods_t ) dlsym( handle, "il2cpp_class_get_methods" );
         method_get_name =
-            ( method_get_name_t ) GetProcAddress( gameAsm, "il2cpp_method_get_name" );
+            ( method_get_name_t ) dlsym( handle, "il2cpp_method_get_name" );
         method_get_flags =
-            ( method_get_flags_t ) GetProcAddress( gameAsm, "il2cpp_method_get_flags" );
-        method_get_param_count = ( method_get_param_count_t ) GetProcAddress(
-            gameAsm, "il2cpp_method_get_param_count" );
+            ( method_get_flags_t ) dlsym( handle, "il2cpp_method_get_flags" );
+        method_get_param_count = ( method_get_param_count_t ) dlsym( handle, "il2cpp_method_get_param_count" );
         method_get_param =
-            ( method_get_param_t ) GetProcAddress( gameAsm, "il2cpp_method_get_param" );
-        method_get_param_name = ( method_get_param_name_t ) GetProcAddress(
-            gameAsm, "il2cpp_method_get_param_name" );
-        method_get_return_type = ( method_get_return_type_t ) GetProcAddress(
-            gameAsm, "il2cpp_method_get_return_type" );
-        method_get_pointer = ( method_get_pointer_t ) GetProcAddress(
-            gameAsm, "il2cpp_method_get_pointer" );
+            ( method_get_param_t ) dlsym( handle, "il2cpp_method_get_param" );
+        method_get_param_name = ( method_get_param_name_t ) dlsym( handle, "il2cpp_method_get_param_name" );
+        method_get_return_type = ( method_get_return_type_t ) dlsym( handle, "il2cpp_method_get_return_type" );
+        method_get_pointer = ( method_get_pointer_t ) dlsym( handle, "il2cpp_method_get_pointer" );
 
         type_get_name =
-            ( type_get_name_t ) GetProcAddress( gameAsm, "il2cpp_type_get_name" );
-        class_get_type_token = ( class_get_type_token_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_type_token" );
+            ( type_get_name_t ) dlsym( handle, "il2cpp_type_get_name" );
+        class_get_type_token = ( class_get_type_token_t ) dlsym( handle, "il2cpp_class_get_type_token" );
 
         thread_attach =
-            ( thread_attach_t ) GetProcAddress( gameAsm, "il2cpp_thread_attach" );
+            ( thread_attach_t ) dlsym( handle, "il2cpp_thread_attach" );
         thread_detach =
-            ( thread_detach_t ) GetProcAddress( gameAsm, "il2cpp_thread_detach" );
+            ( thread_detach_t ) dlsym( handle, "il2cpp_thread_detach" );
 
-        custom_attrs_from_class = ( custom_attrs_from_class_t ) GetProcAddress(
-            gameAsm, "il2cpp_custom_attrs_from_class" );
-        custom_attrs_from_method = ( custom_attrs_from_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_custom_attrs_from_method" );
-        custom_attrs_from_field = ( custom_attrs_from_field_t ) GetProcAddress(
-            gameAsm, "il2cpp_custom_attrs_from_field" );
+        custom_attrs_from_class = ( custom_attrs_from_class_t ) dlsym( handle, "il2cpp_custom_attrs_from_class" );
+        custom_attrs_from_method = ( custom_attrs_from_method_t ) dlsym( handle, "il2cpp_custom_attrs_from_method" );
+        custom_attrs_from_field = ( custom_attrs_from_field_t ) dlsym( handle, "il2cpp_custom_attrs_from_field" );
         custom_attrs_free =
-            ( custom_attrs_free_t ) GetProcAddress( gameAsm, "il2cpp_custom_attrs_free" );
+            ( custom_attrs_free_t ) dlsym( handle, "il2cpp_custom_attrs_free" );
 
         field_get_token =
-            ( field_get_token_t ) GetProcAddress( gameAsm, "il2cpp_field_get_token" );
-        field_static_get_value = ( field_static_get_value_t ) GetProcAddress(
-            gameAsm, "il2cpp_field_static_get_value" );
-        field_get_default_value = ( field_get_default_value_t ) GetProcAddress(
-            gameAsm, "il2cpp_field_get_default_value" );
+            ( field_get_token_t ) dlsym( handle, "il2cpp_field_get_token" );
+        field_static_get_value = ( field_static_get_value_t ) dlsym( handle, "il2cpp_field_static_get_value" );
+        field_get_default_value = ( field_get_default_value_t ) dlsym( handle, "il2cpp_field_get_default_value" );
 
         method_get_token =
-            ( method_get_token_t ) GetProcAddress( gameAsm, "il2cpp_method_get_token" );
+            ( method_get_token_t ) dlsym( handle, "il2cpp_method_get_token" );
         method_is_generic =
-            ( method_is_generic_t ) GetProcAddress( gameAsm, "il2cpp_method_is_generic" );
-        method_is_inflated = ( method_is_inflated_t ) GetProcAddress(
-            gameAsm, "il2cpp_method_is_inflated" );
+            ( method_is_generic_t ) dlsym( handle, "il2cpp_method_is_generic" );
+        method_is_inflated = ( method_is_inflated_t ) dlsym( handle, "il2cpp_method_is_inflated" );
 
         class_from_name =
-            ( class_from_name_t ) GetProcAddress( gameAsm, "il2cpp_class_from_name" );
-        class_instance_size = ( class_instance_size_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_instance_size" );
+            ( class_from_name_t ) dlsym( handle, "il2cpp_class_from_name" );
+        class_instance_size = ( class_instance_size_t ) dlsym( handle, "il2cpp_class_instance_size" );
         class_value_size =
-            ( class_value_size_t ) GetProcAddress( gameAsm, "il2cpp_class_value_size" );
+            ( class_value_size_t ) dlsym( handle, "il2cpp_class_value_size" );
 
-        class_get_properties = ( class_get_properties_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_properties" );
+        class_get_properties = ( class_get_properties_t ) dlsym( handle, "il2cpp_class_get_properties" );
         class_get_events =
-            ( class_get_events_t ) GetProcAddress( gameAsm, "il2cpp_class_get_events" );
-        class_get_nested_types = ( class_get_nested_types_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_nested_types" );
+            ( class_get_events_t ) dlsym( handle, "il2cpp_class_get_events" );
+        class_get_nested_types = ( class_get_nested_types_t ) dlsym( handle, "il2cpp_class_get_nested_types" );
 
         property_get_name =
-            ( property_get_name_t ) GetProcAddress( gameAsm, "il2cpp_property_get_name" );
-        property_get_get_method = ( property_get_get_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_property_get_get_method" );
-        property_get_set_method = ( property_get_set_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_property_get_set_method" );
-        property_get_flags = ( property_get_flags_t ) GetProcAddress(
-            gameAsm, "il2cpp_property_get_flags" );
+            ( property_get_name_t ) dlsym( handle, "il2cpp_property_get_name" );
+        property_get_get_method = ( property_get_get_method_t ) dlsym( handle, "il2cpp_property_get_get_method" );
+        property_get_set_method = ( property_get_set_method_t ) dlsym( handle, "il2cpp_property_get_set_method" );
+        property_get_flags = ( property_get_flags_t ) dlsym( handle, "il2cpp_property_get_flags" );
 
         event_get_name =
-            ( event_get_name_t ) GetProcAddress( gameAsm, "il2cpp_event_get_name" );
-        event_get_add_method = ( event_get_add_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_event_get_add_method" );
-        event_get_remove_method = ( event_get_remove_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_event_get_remove_method" );
-        event_get_raise_method = ( event_get_raise_method_t ) GetProcAddress(
-            gameAsm, "il2cpp_event_get_raise_method" );
+            ( event_get_name_t ) dlsym( handle, "il2cpp_event_get_name" );
+        event_get_add_method = ( event_get_add_method_t ) dlsym( handle, "il2cpp_event_get_add_method" );
+        event_get_remove_method = ( event_get_remove_method_t ) dlsym( handle, "il2cpp_event_get_remove_method" );
+        event_get_raise_method = ( event_get_raise_method_t ) dlsym( handle, "il2cpp_event_get_raise_method" );
 
         // Runtime invocation suite (for live scene dumper)
-        class_get_method_from_name = ( class_get_method_from_name_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_method_from_name" );
+        class_get_method_from_name = ( class_get_method_from_name_t ) dlsym( handle, "il2cpp_class_get_method_from_name" );
         runtime_invoke =
-            ( runtime_invoke_t ) GetProcAddress( gameAsm, "il2cpp_runtime_invoke" );
+            ( runtime_invoke_t ) dlsym( handle, "il2cpp_runtime_invoke" );
         type_get_object =
-            ( type_get_object_t ) GetProcAddress( gameAsm, "il2cpp_type_get_object" );
+            ( type_get_object_t ) dlsym( handle, "il2cpp_type_get_object" );
         class_get_type =
-            ( class_get_type_t ) GetProcAddress( gameAsm, "il2cpp_class_get_type" );
-        array_length = ( array_length_t ) GetProcAddress( gameAsm, "il2cpp_array_length" );
+            ( class_get_type_t ) dlsym( handle, "il2cpp_class_get_type" );
+        array_length = ( array_length_t ) dlsym( handle, "il2cpp_array_length" );
         string_length_fn =
-            ( string_length_t ) GetProcAddress( gameAsm, "il2cpp_string_length" );
-        string_chars = ( string_chars_t ) GetProcAddress( gameAsm, "il2cpp_string_chars" );
-        object_unbox = ( object_unbox_t ) GetProcAddress( gameAsm, "il2cpp_object_unbox" );
+            ( string_length_t ) dlsym( handle, "il2cpp_string_length" );
+        string_chars = ( string_chars_t ) dlsym( handle, "il2cpp_string_chars" );
+        object_unbox = ( object_unbox_t ) dlsym( handle, "il2cpp_object_unbox" );
         field_get_value =
-            ( field_get_value_t ) GetProcAddress( gameAsm, "il2cpp_field_get_value" );
-        class_get_field_from_name = ( class_get_field_from_name_t ) GetProcAddress(
-            gameAsm, "il2cpp_class_get_field_from_name" );
+            ( field_get_value_t ) dlsym( handle, "il2cpp_field_get_value" );
+        class_get_field_from_name = ( class_get_field_from_name_t ) dlsym( handle, "il2cpp_class_get_field_from_name" );
 
         gc_register_my_thread =
-            ( gc_register_my_thread_t ) GetProcAddress( gameAsm, "GC_register_my_thread" );
-        gc_unregister_my_thread = ( gc_unregister_my_thread_t ) GetProcAddress(
-            gameAsm, "GC_unregister_my_thread" );
-        gc_disable = ( gc_disable_t ) GetProcAddress( gameAsm, "il2cpp_gc_disable" );
-        gc_enable = ( gc_enable_t ) GetProcAddress( gameAsm, "il2cpp_gc_enable" );
+            ( gc_register_my_thread_t ) dlsym( handle, "GC_register_my_thread" );
+        gc_unregister_my_thread = ( gc_unregister_my_thread_t ) dlsym( handle, "GC_unregister_my_thread" );
+        gc_disable = ( gc_disable_t ) dlsym( handle, "il2cpp_gc_disable" );
+        gc_enable = ( gc_enable_t ) dlsym( handle, "il2cpp_gc_enable" );
         gc_is_disabled =
-            ( gc_is_disabled_t ) GetProcAddress( gameAsm, "il2cpp_gc_is_disabled" );
-        gc_disable_boehm = ( gc_disable_boehm_t ) GetProcAddress( gameAsm, "GC_disable" );
-        gc_enable_boehm = ( gc_enable_boehm_t ) GetProcAddress( gameAsm, "GC_enable" );
-        gc_dont_gc_ptr = ( int * ) GetProcAddress( gameAsm, "GC_dont_gc" );
+            ( gc_is_disabled_t ) dlsym( handle, "il2cpp_gc_is_disabled" );
+        gc_disable_boehm = ( gc_disable_boehm_t ) dlsym( handle, "GC_disable" );
+        gc_enable_boehm = ( gc_enable_boehm_t ) dlsym( handle, "GC_enable" );
+        gc_dont_gc_ptr = ( int * ) dlsym( handle, "GC_dont_gc" );
 
         if ( !get_domain || !get_assemblies || !assembly_get_image ||
             !image_get_name ) {

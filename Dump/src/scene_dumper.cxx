@@ -11,7 +11,6 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
-#include <windows.h>
 
 namespace {
 
@@ -26,14 +25,8 @@ namespace {
     int g_maxGOs = 0; // 0 = no cap
 
     static void DetectHardwareTier( ) {
-        SYSTEM_INFO si = { 0 };
-        GetSystemInfo( &si );
-        DWORD cores = si.dwNumberOfProcessors;
-
-        MEMORYSTATUSEX ms = { 0 };
-        ms.dwLength = sizeof( ms );
-        GlobalMemoryStatusEx( &ms );
-        DWORDLONG ramGb = ms.ullTotalPhys / ( 1024ULL * 1024ULL * 1024ULL );
+        unsigned int cores = HardwareCpuCount( );
+        unsigned long long ramGb = HardwareRamGb( );
 
         if ( cores <= 4 || ramGb <= 8 ) {
             g_hwTier = HwTier::LOW;
@@ -64,32 +57,28 @@ namespace {
     }
 
     static bool MemoryHealthy( ) {
-        MEMORYSTATUSEX ms = { 0 };
-        ms.dwLength = sizeof( ms );
-        if ( !GlobalMemoryStatusEx( &ms ) )
-            return true;
-        return ms.ullAvailPhys > ( 512ULL * 1024ULL * 1024ULL );
+        return MemoryHealthyEnough( );
     }
 
     struct GcSuspendScope {
         int saved;
         GcSuspendScope( ) : saved( -1 ) {
             if ( api::gc_dont_gc_ptr ) {
-                __try {
+                try {
                     saved = *api::gc_dont_gc_ptr;
                     *api::gc_dont_gc_ptr = saved + 1;
                 }
-                __except ( EXCEPTION_EXECUTE_HANDLER ) {
+                catch ( ... ) {
                     saved = -1;
                 }
             }
         }
         ~GcSuspendScope( ) {
             if ( saved >= 0 && api::gc_dont_gc_ptr ) {
-                __try {
+                try {
                     *api::gc_dont_gc_ptr = saved;
                 }
-                __except ( EXCEPTION_EXECUTE_HANDLER ) {
+                catch ( ... ) {
                 }
             }
         }
@@ -147,34 +136,28 @@ namespace {
         if ( !str || !api::string_length_fn || !api::string_chars )
             return "";
         int len = 0;
-        wchar_t * chars = nullptr;
-        __try {
+        char16_t * chars = nullptr;
+        try {
             len = api::string_length_fn( str );
             chars = api::string_chars( str );
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return "";
         }
         if ( len <= 0 || !chars )
             return "";
 
-        int sz =
-            WideCharToMultiByte( CP_UTF8, 0, chars, len, nullptr, 0, nullptr, nullptr );
-        if ( sz <= 0 || sz > 1 << 20 )
-            return "";
-        std::string out( static_cast< size_t >( sz ), '\0' );
-        WideCharToMultiByte( CP_UTF8, 0, chars, len, &out [ 0 ], sz, nullptr, nullptr );
-        return out;
+        return Utf16ToUtf8( chars, len );
     }
 
     static void * Invoke( void * method, void * obj, void ** params = nullptr ) {
         if ( !method || !api::runtime_invoke )
             return nullptr;
         void * exc = nullptr;
-        __try {
+        try {
             return api::runtime_invoke( method, obj, params, &exc );
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return nullptr;
         }
     }
@@ -182,13 +165,13 @@ namespace {
     template <typename T> static bool UnboxAs( void * boxed, T & out ) {
         if ( !boxed || !api::object_unbox )
             return false;
-        __try {
+        try {
             T * p = reinterpret_cast< T * >( api::object_unbox( boxed ) );
             if ( !p )
                 return false;
             out = *p;
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return false;
         }
         return true;
@@ -240,10 +223,10 @@ namespace {
     static int32_t ArrayLengthSafe( void * arr ) {
         if ( !arr || !api::array_length )
             return 0;
-        __try {
+        try {
             return api::array_length( arr );
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return 0;
         }
     }
@@ -251,11 +234,11 @@ namespace {
     static void * ArrayElement( void * arr, int32_t i ) {
         if ( !arr )
             return nullptr;
-        __try {
+        try {
             void ** vec = reinterpret_cast< void ** >( reinterpret_cast< char * >( arr ) + 32 );
             return vec [ i ];
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return nullptr;
         }
     }
@@ -263,7 +246,7 @@ namespace {
     static std::string ObjectClassFq( void * obj ) {
         if ( !obj )
             return "";
-        __try {
+        try {
             void * k = *reinterpret_cast< void ** >( obj );
             if ( !k )
                 return "";
@@ -274,7 +257,7 @@ namespace {
                 return "";
             return ( ns && *ns ) ? std::string( ns ) + "." + n : std::string( n );
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             return "";
         }
     }
@@ -282,7 +265,7 @@ namespace {
     static bool IsSubclassOf( void * klass, void * target ) {
         if ( !klass || !target )
             return false;
-        __try {
+        try {
             void * k = klass;
             for ( int i = 0; i < 32 && k; ++i ) {
                 if ( k == target )
@@ -290,7 +273,7 @@ namespace {
                 k = api::class_get_parent ? api::class_get_parent( k ) : nullptr;
             }
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
         }
         return false;
     }
@@ -468,7 +451,7 @@ namespace {
             int fieldsSeen = 0;
 
             // SEH around the iter to swallow torn metadata.
-            __try {
+            try {
                 while ( void * f = api::class_get_fields( k, &iter ) ) {
                     if ( !f )
                         break;
@@ -504,7 +487,7 @@ namespace {
                     const unsigned char * fp =
                         reinterpret_cast< const unsigned char * >( comp ) + off;
 
-                    __try {
+                    try {
                         out << "    field " << typeName << " " << fname << " = ";
 
                         if ( typeName == "System.Boolean" || typeName == "bool" ) {
@@ -576,19 +559,19 @@ namespace {
                         }
                         out << "\n";
                     }
-                    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+                    catch ( ... ) {
                         out << "<read fault>\n";
                     }
                 }
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
             }
 
             void * parentK = nullptr;
-            __try {
+            try {
                 parentK = api::class_get_parent ? api::class_get_parent( k ) : nullptr;
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
                 parentK = nullptr;
             }
             k = parentK;
@@ -615,10 +598,10 @@ namespace {
             out << "  comp \"" << fq << "\"\n";
 
             void * compKlass = nullptr;
-            __try {
+            try {
                 compKlass = *reinterpret_cast< void ** >( comp );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
                 compKlass = nullptr;
             }
 
@@ -767,8 +750,8 @@ void SceneDumper::Dump( ) {
         st.wHour, st.wMinute, st.wSecond );
 
     std::string base =
-        g_outputDir.empty( ) ? std::string( "C:\\" ) : g_outputDir + "\\";
-    std::string path = base + "IL2CPP_World_Dump_" + ts + ".txt";
+        g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir;
+    std::string path = JoinPath( base, std::string( "IL2CPP_World_Dump_" ) + ts + ".txt" );
 
     std::ofstream out( path, std::ios::out | std::ios::trunc );
     if ( !out.is_open( ) ) {
@@ -804,7 +787,7 @@ void SceneDumper::Dump( ) {
     int32_t dumped = 0, skipped = 0;
     int reportEvery = g_deepFieldDump ? 50 : ( walkLimit > 5000 ? 1000 : 250 );
 
-    std::string trackerPath = base + "IL2CPP_DumpTracker.txt";
+    std::string trackerPath = JoinPath( base, "IL2CPP_DumpTracker.txt" );
     fopen_s( &g_tracker, trackerPath.c_str( ), "w" );
     if ( g_tracker ) {
         fprintf( g_tracker, "started\n" );
@@ -841,7 +824,7 @@ void SceneDumper::Dump( ) {
             fflush( g_tracker );
         }
 
-        __try {
+        try {
             std::string name = GetName( go );
             int32_t id = GetInstanceId( go );
 
@@ -901,7 +884,7 @@ void SceneDumper::Dump( ) {
             out << "\n";
             ++dumped;
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             ++skipped;
         }
 
@@ -950,8 +933,8 @@ void SceneDumper::DumpCamera( ) {
         st.wHour, st.wMinute, st.wSecond );
 
     std::string base =
-        g_outputDir.empty( ) ? std::string( "C:\\" ) : g_outputDir + "\\";
-    std::string path = base + "IL2CPP_Camera_" + ts + ".txt";
+        g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir;
+    std::string path = JoinPath( base, std::string( "IL2CPP_Camera_" ) + ts + ".txt" );
     std::ofstream out( path, std::ios::out | std::ios::trunc );
     if ( !out.is_open( ) ) {
         Log( "cannot open: " + path );
@@ -1047,9 +1030,9 @@ void SceneDumper::DumpMeshColliders( ) {
     sprintf_s( ts, "%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay,
         st.wHour, st.wMinute, st.wSecond );
 
-    std::string base = g_outputDir.empty( ) ? "C:\\" : g_outputDir + "\\";
-    std::string idxPath = base + "IL2CPP_MeshColliders_" + ts + ".txt";
-    std::string binPath = base + "IL2CPP_MeshColliders_" + ts + ".bin";
+    std::string base = g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir;
+    std::string idxPath = JoinPath( base, std::string( "IL2CPP_MeshColliders_" ) + ts + ".txt" );
+    std::string binPath = JoinPath( base, std::string( "IL2CPP_MeshColliders_" ) + ts + ".bin" );
 
     std::ofstream idx( idxPath, std::ios::out | std::ios::trunc );
     idx << "# MeshCollider dump  " << ts << "\n";
@@ -1077,7 +1060,7 @@ void SceneDumper::DumpMeshColliders( ) {
             continue;
         }
 
-        __try {
+        try {
             void * mesh = Invoke( mGetSharedMesh, mc );
             if ( !mesh ) {
                 ++skipped;
@@ -1117,25 +1100,25 @@ void SceneDumper::DumpMeshColliders( ) {
             fwrite( &u_id, sizeof( uint32_t ), 1, bf );
             fwrite( &colPos, sizeof( Vector3 ), 1, bf );
             fwrite( &u_vc, sizeof( uint32_t ), 1, bf );
-            __try {
+            try {
                 Vector3 * vp =
                     reinterpret_cast< Vector3 * >( reinterpret_cast< char * >( verts ) + 32 );
                 fwrite( vp, sizeof( Vector3 ), vc, bf );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
             }
             fwrite( &u_ic, sizeof( uint32_t ), 1, bf );
-            __try {
+            try {
                 int32_t * ip =
                     reinterpret_cast< int32_t * >( reinterpret_cast< char * >( tris ) + 32 );
                 fwrite( ip, sizeof( int32_t ), ic, bf );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
             }
 
             ++written;
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {
+        catch ( ... ) {
             ++skipped;
         }
     }
@@ -1153,8 +1136,8 @@ void SceneDumper::DumpClassesByList( ) {
     if ( !g_ready )
         return;
 
-    std::string base = g_outputDir.empty( ) ? "C:\\" : g_outputDir + "\\";
-    std::string listPath = base + "IL2CPP_ScanList.txt";
+    std::string base = g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir;
+    std::string listPath = JoinPath( base, "IL2CPP_ScanList.txt" );
 
     std::ifstream listIn( listPath );
     if ( !listIn.is_open( ) ) {
@@ -1193,7 +1176,7 @@ void SceneDumper::DumpClassesByList( ) {
     sprintf_s( ts, "%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay,
         st.wHour, st.wMinute, st.wSecond );
 
-    std::string outPath = base + "IL2CPP_Scan_" + ts + ".txt";
+    std::string outPath = JoinPath( base, std::string( "IL2CPP_Scan_" ) + ts + ".txt" );
     std::ofstream out( outPath, std::ios::out | std::ios::trunc );
     out << "# Targeted class scan  " << ts << "\n";
 

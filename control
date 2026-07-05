@@ -1,0 +1,9 @@
+Package: com.desirepro.il2cppdumper
+Name: IL2CPP Dumper
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: iOS tweak payload for dumping Unity IL2CPP metadata and optional runtime scene data.
+Maintainer: desirepro
+Author: desirepro
+Section: Tweaks
+Depends: mobilesubstrate

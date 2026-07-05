@@ -2,6 +2,7 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -208,7 +209,7 @@ static std::string FormatRva( const MethodData & m ) {
 void Dumper::DumpAssemblyNormal(
     const std::string & asmName, std::size_t classCount,
     const std::map<std::string, std::vector<CachedClass>> & nsClasses ) {
-    std::string filename = GetDumpDirNormal( ) + asmName + ".cs";
+    std::string filename = JoinPath( GetDumpDirNormal( ), asmName + ".cs" );
     std::ofstream out( filename, std::ios::out );
     if ( !out.is_open( ) ) {
         Log( "Failed to open: " + filename );
@@ -219,7 +220,7 @@ void Dumper::DumpAssemblyNormal(
     out << "// Dumped by @desirepro\n";
     out << "// Assembly: " << asmName << "\n";
     out << "// Classes:  " << classCount << "\n";
-    out << "// Module:   GameAssembly.dll  base=0x" << std::hex << std::uppercase
+    out << "// Module:   IL2CPP image  base=0x" << std::hex << std::uppercase
         << api::module_base << std::dec << "\n";
     out << "// Date:     " << __DATE__ << " " << __TIME__ << "\n";
     out << "// ========================================================\n\n";
@@ -363,7 +364,7 @@ void Dumper::DumpAssemblyNormal(
 void Dumper::DumpAssemblyAi(
     const std::string & asmName, std::size_t classCount,
     const std::map<std::string, std::vector<CachedClass>> & nsClasses ) {
-    std::string filename = GetDumpDirAi( ) + asmName + ".cs";
+    std::string filename = JoinPath( GetDumpDirAi( ), asmName + ".cs" );
     std::ofstream out( filename, std::ios::out );
     if ( !out.is_open( ) ) {
         Log( "Failed to open: " + filename );
@@ -374,7 +375,7 @@ void Dumper::DumpAssemblyAi(
     out << "// Dumped by @desirepro\n";
     out << "// Assembly: " << asmName << "\n";
     out << "// Classes:  " << classCount << "\n";
-    out << "// Module:   GameAssembly.dll  base=0x" << std::hex << std::uppercase
+    out << "// Module:   IL2CPP image  base=0x" << std::hex << std::uppercase
         << api::module_base << std::dec << "\n";
     out << "// Date:     " << __DATE__ << " " << __TIME__ << "\n";
     out << "// ========================================================\n\n";
@@ -503,16 +504,16 @@ static bool ReadLiteralInt( const FieldData & f, int64_t & out ) {
         return false;
 
     void * data = nullptr;
-    __try {
+    try {
         api::field_get_default_value( f.raw, &data );
     }
-    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+    catch ( ... ) {
         return false;
     }
     if ( !data )
         return false;
 
-    __try {
+    try {
         if ( f.type == "System.Int32" || f.type == "int" )
             out = *reinterpret_cast< int32_t * >( data );
         else if ( f.type == "System.UInt32" || f.type == "uint" )
@@ -534,7 +535,7 @@ static bool ReadLiteralInt( const FieldData & f, int64_t & out ) {
         else
             return false;
     }
-    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+    catch ( ... ) {
         return false;
     }
 
@@ -567,22 +568,19 @@ static std::string FormatFieldOffset( const FieldData & f ) {
 static bool ReadIl2CppString( void * strPtr, std::string & out ) {
     if ( !strPtr )
         return false;
-    __try {
+    try {
         int32_t len =
             *reinterpret_cast< int32_t * >( reinterpret_cast< char * >( strPtr ) + 16 );
         if ( len < 0 || len > 65536 )
             return false;
-        wchar_t * chars =
-            reinterpret_cast< wchar_t * >( reinterpret_cast< char * >( strPtr ) + 20 );
+        char16_t * chars =
+            reinterpret_cast< char16_t * >( reinterpret_cast< char * >( strPtr ) + 20 );
 
-        int sz = WideCharToMultiByte( CP_UTF8, 0, chars, len, nullptr, 0, nullptr,
-            nullptr );
-        if ( sz <= 0 || sz > 1 << 20 )
+        out = Utf16ToUtf8( chars, len );
+        if ( out.empty( ) )
             return false;
-        out.assign( static_cast< size_t >( sz ), '\0' );
-        WideCharToMultiByte( CP_UTF8, 0, chars, len, &out [ 0 ], sz, nullptr, nullptr );
     }
-    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+    catch ( ... ) {
         return false;
     }
     return true;
@@ -645,10 +643,10 @@ void Dumper::DumpStringLiterals(
                     continue;
 
                 void * value = nullptr;
-                __try {
+                try {
                     api::field_static_get_value( f.raw, &value );
                 }
-                __except ( EXCEPTION_EXECUTE_HANDLER ) {
+                catch ( ... ) {
                     value = nullptr;
                 }
                 if ( !value )
@@ -671,12 +669,14 @@ void Dumper::DumpStringLiterals(
 }
 
 static bool DirHasDumpFiles( const std::string & dir ) {
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA( ( dir + "*.cs" ).c_str( ), &fd );
-    if ( h == INVALID_HANDLE_VALUE )
+    namespace fs = std::filesystem;
+    if ( !fs::is_directory( dir ) )
         return false;
-    FindClose( h );
-    return true;
+    for ( const auto & entry : fs::directory_iterator( dir ) ) {
+        if ( entry.is_regular_file( ) && entry.path( ).extension( ) == ".cs" )
+            return true;
+    }
+    return false;
 }
 
 void Dumper::DumpAllToFiles( ) {
@@ -696,8 +696,8 @@ void Dumper::DumpAllToFiles( ) {
 
     // one shared file for all literals across assemblies
     std::string stringsPath =
-        ( g_outputDir.empty( ) ? std::string( "C:\\" ) : g_outputDir + "\\" ) +
-        "IL2CPP_Dump_Strings.txt";
+        JoinPath( g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir,
+            "IL2CPP_Dump_Strings.txt" );
     std::ofstream stringsOut( stringsPath, std::ios::out | std::ios::trunc );
     stringsOut << "# Static const string literals\n";
     stringsOut << "# format: <Namespace.Class>::<field> = \"<utf8 value>\"\n";

@@ -2,15 +2,13 @@
 #include "../include/il2cpp_api.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
-#include <excpt.h>
-#include <windows.h>
 
 static std::vector<std::string> ParseAttrCache( void * cache ) {
     std::vector<std::string> result;
     if ( !cache )
         return result;
 
-    __try {
+    try {
         struct CACache {
             int32_t count;
             int32_t pad;
@@ -49,7 +47,7 @@ static std::vector<std::string> ParseAttrCache( void * cache ) {
             result.push_back( std::move( fq ) );
         }
     }
-    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+    catch ( ... ) {
         result.clear( );
     }
 
@@ -167,10 +165,10 @@ std::vector<std::string> Il2CppClass::GetAttributes( ) const {
     if ( !klass || !api::custom_attrs_from_class )
         return {};
     void * cache = nullptr;
-    __try {
+    try {
         cache = api::custom_attrs_from_class( klass );
     }
-    __except ( EXCEPTION_EXECUTE_HANDLER ) {
+    catch ( ... ) {
         return {};
     }
     return ParseAttrCache( cache );
@@ -257,10 +255,10 @@ std::vector<FieldData> Il2CppClass::GetFields( ) const {
 
         if ( api::custom_attrs_from_field ) {
             void * cache = nullptr;
-            __try {
+            try {
                 cache = api::custom_attrs_from_field( klass, field );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
                 cache = nullptr;
             }
             fd.attributes = ParseAttrCache( cache );
@@ -349,11 +347,11 @@ std::vector<MethodData> Il2CppClass::GetMethods( ) const {
         }
 
         if ( !md.address ) {
-            __try {
+            try {
                 uintptr_t a = *reinterpret_cast< uintptr_t * >( method );
                 tryAddr( a );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
             }
         }
 
@@ -363,10 +361,10 @@ std::vector<MethodData> Il2CppClass::GetMethods( ) const {
 
         if ( api::custom_attrs_from_method ) {
             void * cache = nullptr;
-            __try {
+            try {
                 cache = api::custom_attrs_from_method( method );
             }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {
+            catch ( ... ) {
                 cache = nullptr;
             }
             md.attributes = ParseAttrCache( cache );

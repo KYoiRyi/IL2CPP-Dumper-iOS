@@ -1,38 +1,25 @@
-# build outputs
-x64/
-Win32/
-Debug/
-Release/
-*.obj/
-*.tlog/
+# Theos and package outputs
+.theos/
+packages/
+*.deb
 
-# VS user state
-.vs/
-*.vcxproj.user
-*.vcxproj.filters
-*.suo
-*.opensdf
-*.sdf
-*.VC.db
-*.VC.opendb
-mydatabase.db
+# Local dependency cache
+.deps/
 
-# build artefacts
+# Object files and generated binaries
+*.o
 *.obj
-*.pdb
-*.ipdb
-*.iobj
-*.ilk
-*.exp
-*.lib
-*.idb
-*.exe
-*.dll
-*.recipe
-*.log
-*.res
+*.dylib
+*.so
+*.a
+*.dSYM/
 
-# dumps
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Dump outputs
 IL2CPP_Dump_Normal/
 IL2CPP_Dump_AI/
 IL2CPP_Dump_Strings.txt
