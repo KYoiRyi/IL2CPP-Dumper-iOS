@@ -21,26 +21,26 @@ static bool UnsafeRuntimeEnabled( ) {
 
 static bool WaitForIl2CppReady( ) {
     constexpr DWORD totalTimeoutMs = 90000;
-    constexpr DWORD apiPollMs = 250;
-    constexpr DWORD metadataStartDelayMs = 3000;
-    constexpr DWORD metadataScanIntervalMs = 1000;
+    constexpr DWORD pollMs = 100;
+    constexpr DWORD metadataScanIntervalMs = 100;
     DWORD start = GetTickCount( );
     DWORD lastMetadataScan = 0;
     bool metadataDumped = false;
 
     while ( true ) {
+        DWORD now = GetTickCount( );
+
+        if ( !metadataDumped &&
+            ( lastMetadataScan == 0 || now - lastMetadataScan >= metadataScanIntervalMs ) ) {
+            lastMetadataScan = now;
+            metadataDumped = api::try_dump_metadata_fallback( );
+        }
+
         api::init( );
         if ( api::initialized ) {
             if ( metadataDumped )
                 Log( "[metadata] IL2CPP API became ready after fallback dump; using API dumper" );
             break;
-        }
-
-        DWORD now = GetTickCount( );
-        if ( !metadataDumped && now - start >= metadataStartDelayMs &&
-            ( lastMetadataScan == 0 || now - lastMetadataScan >= metadataScanIntervalMs ) ) {
-            lastMetadataScan = now;
-            metadataDumped = api::try_dump_metadata_fallback( );
         }
 
         if ( now - start > totalTimeoutMs ) {
@@ -49,7 +49,7 @@ static bool WaitForIl2CppReady( ) {
                     : "[error] IL2CPP runtime was not ready before timeout" );
             return false;
         }
-        Sleep( apiPollMs );
+        Sleep( pollMs );
     }
 
     Log( "IL2CPP domain ready, settling for 12s before dumping..." );

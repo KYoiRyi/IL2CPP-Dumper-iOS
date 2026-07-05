@@ -1,5 +1,4 @@
 #include "../include/il2cpp_api.hxx"
-#include "../include/metadata_dumper.hxx"
 #include "../include/utils.hxx"
 #include <algorithm>
 #include <cstring>
@@ -113,7 +112,7 @@ namespace api {
         constexpr uint32_t kMetadataMagic = 0xFAB11BAF;
         constexpr size_t kMinMetadataSize = 0x1000;
         constexpr size_t kMaxMetadataDumpSize = 512ULL * 1024ULL * 1024ULL;
-        constexpr size_t kScanChunkSize = 64 * 1024;
+        constexpr size_t kScanChunkSize = 256 * 1024;
 
         bool QueryReadableRegion( uintptr_t address,
             uintptr_t & startOut,
@@ -243,7 +242,6 @@ namespace api {
             sprintf_s( buf, "[metadata] dumped %zu bytes from %s -> %s",
                 written, source.c_str( ), path.c_str( ) );
             Log( buf );
-            DumpMetadataCsFromFile( path, g_outputDir.empty( ) ? DefaultOutputDir( ) : g_outputDir );
             return true;
         }
 
