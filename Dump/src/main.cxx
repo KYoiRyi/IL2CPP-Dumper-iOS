@@ -41,6 +41,7 @@ struct Il2CppStringHeader {
 
 std::recursive_mutex g_lock;
 std::atomic<uint64_t> g_counter { 0 };
+std::atomic<int> g_stage { 0 };
 std::string g_root;
 
 static bool Mkdir(const std::string & path) {
@@ -73,21 +74,35 @@ static uint64_t NowMs() {
 }
 
 static void LogLine(const char * fmt, ...) {
-    std::lock_guard<std::recursive_mutex> guard(g_lock);
     char path[1024];
     std::snprintf(path, sizeof(path), "%s/probe.log", RootDir().c_str());
 
-    FILE * fp = std::fopen(path, "ab");
-    if (!fp)
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0)
         return;
 
-    std::fprintf(fp, "[%llu] ", static_cast<unsigned long long>(NowMs()));
+    char line[2048];
+    int prefix = std::snprintf(line, sizeof(line), "[%llu] stage=%d ",
+        static_cast<unsigned long long>(NowMs()),
+        g_stage.load());
+    if (prefix < 0)
+        prefix = 0;
+    if (prefix >= static_cast<int>(sizeof(line)))
+        prefix = static_cast<int>(sizeof(line)) - 1;
+
     va_list ap;
     va_start(ap, fmt);
-    std::vfprintf(fp, fmt, ap);
+    int body = std::vsnprintf(line + prefix, sizeof(line) - static_cast<size_t>(prefix), fmt, ap);
     va_end(ap);
-    std::fprintf(fp, "\n");
-    std::fclose(fp);
+
+    int total = prefix + (body > 0 ? body : 0);
+    if (total < 0)
+        total = 0;
+    if (total >= static_cast<int>(sizeof(line)) - 2)
+        total = static_cast<int>(sizeof(line)) - 2;
+    line[total++] = '\n';
+    ::write(fd, line, static_cast<size_t>(total));
+    ::close(fd);
 }
 
 static void SignalLog(int sig, siginfo_t * info, void * context) {
@@ -102,10 +117,11 @@ static void SignalLog(int sig, siginfo_t * info, void * context) {
     if (fd >= 0) {
         char line[256];
         int len = std::snprintf(line, sizeof(line),
-            "signal=%d fault_addr=%p counter=%llu\n",
+            "signal=%d fault_addr=%p counter=%llu stage=%d\n",
             sig,
             info ? info->si_addr : nullptr,
-            static_cast<unsigned long long>(g_counter.load()));
+            static_cast<unsigned long long>(g_counter.load()),
+            g_stage.load());
         if (len > 0)
             ::write(fd, line, static_cast<size_t>(len));
         ::close(fd);
@@ -124,6 +140,12 @@ static void InstallSignalLogs() {
     sigaction(SIGBUS, &sa, nullptr);
     sigaction(SIGILL, &sa, nullptr);
     sigaction(SIGSEGV, &sa, nullptr);
+}
+
+static bool FullDumpEnabled() {
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/enable_full_dump", RootDir().c_str());
+    return ::access(path, F_OK) == 0;
 }
 
 static void WriteBlob(const char * dir, const char * tag, const void * data, size_t size) {
@@ -174,6 +196,10 @@ static void WriteText(const char * dir, const char * tag, const char * text, siz
 
 static void DumpByteArray(const char * dir, const char * tag, void * arrayObj) {
     LogLine("DumpByteArray enter dir=%s tag=%s array=%p", dir, tag, arrayObj);
+    if (!FullDumpEnabled()) {
+        LogLine("DumpByteArray skipped; create enable_full_dump to dereference arrays");
+        return;
+    }
     auto * array = reinterpret_cast<Il2CppArrayHeader *>(arrayObj);
     if (!array)
         return;
@@ -204,6 +230,10 @@ static std::string Utf16ToUtf8(const uint16_t * chars, int32_t len) {
 
 static void DumpString(const char * dir, const char * tag, void * stringObj) {
     LogLine("DumpString enter dir=%s tag=%s string=%p", dir, tag, stringObj);
+    if (!FullDumpEnabled()) {
+        LogLine("DumpString skipped; create enable_full_dump to dereference strings");
+        return;
+    }
     auto * s = reinterpret_cast<Il2CppStringHeader *>(stringObj);
     if (!s || s->length <= 0 || s->length > 1024 * 1024)
         return;
@@ -217,6 +247,7 @@ static bool ContainsName(const char * imageName, const char * needle) {
 }
 
 static void FillPointerTable() {
+    g_stage.store(20);
     LogLine("FillPointerTable begin");
     void * handlers[] = {
         reinterpret_cast<void *>(&xsp_udp_send_payload),
@@ -251,6 +282,7 @@ static void FillPointerTable() {
                             void ** slots = reinterpret_cast<void **>(p + 8);
                             for (size_t n = 0; n < sizeof(handlers) / sizeof(handlers[0]); ++n)
                                 slots[n] = handlers[n];
+                            g_stage.store(29);
                             LogLine("FillPointerTable ok table=%p slots=%p", p, slots);
                             return;
                         }
@@ -266,34 +298,48 @@ static void FillPointerTable() {
 } // namespace
 
 extern "C" __attribute__((visibility("default"))) void xsp_udp_send_payload(void * self, void * payload) {
+    g_stage.store(100);
     LogLine("handler xsp_udp_send_payload self=%p payload=%p", self, payload);
     DumpByteArray("udp", "send_payload", payload);
+    g_stage.store(109);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_udp_process_packet(void * self, void * packet) {
+    g_stage.store(110);
     LogLine("handler xsp_udp_process_packet self=%p packet=%p", self, packet);
     DumpByteArray("udp", "process_packet", packet);
+    g_stage.store(119);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_config_bytebuf_wrap(void * bytes) {
+    g_stage.store(120);
     LogLine("handler xsp_config_bytebuf_wrap bytes=%p", bytes);
     DumpByteArray("config", "bytebuf_wrap", bytes);
+    g_stage.store(129);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_config_from_string(void * value) {
+    g_stage.store(130);
     LogLine("handler xsp_config_from_string value=%p", value);
     DumpString("config", "from_string", value);
+    g_stage.store(139);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_dll_blob(const void * data, uint64_t size) {
+    g_stage.store(140);
     LogLine("handler xsp_dll_blob data=%p size=%llu", data, static_cast<unsigned long long>(size));
     WriteBlob("dll", "decrypted_bundle", data, static_cast<size_t>(size));
+    g_stage.store(149);
 }
 
 __attribute__((constructor)) static void XueSongProbeCtor() {
+    g_stage.store(1);
     RootDir();
+    g_stage.store(2);
     InstallSignalLogs();
+    g_stage.store(3);
     LogLine("XueSongProbe ctor begin");
     FillPointerTable();
+    g_stage.store(30);
     LogLine("XueSongProbe ctor end");
 }
