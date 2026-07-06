@@ -5,7 +5,8 @@ param(
     [string]$RunId = "",
     [string]$OutputIpa = "",
     [string]$WorkDir = "",
-    [switch]$SkipDownload
+    [switch]$SkipDownload,
+    [switch]$Plain
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,12 @@ if (-not $UnpackedAppDir) {
 $UnpackedAppDir = Resolve-FullPath $UnpackedAppDir
 
 if (-not $OutputIpa) {
-    $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_static_probe_logging_unsigned.ipa"
+    if ($Plain) {
+        $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_plain_repacked_unsigned.ipa"
+    }
+    else {
+        $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_static_probe_logging_unsigned.ipa"
+    }
 }
 $OutputIpa = Resolve-FullPath $OutputIpa
 
@@ -46,40 +52,42 @@ if (-not (Test-Path $OriginalUnityFramework)) {
     throw "UnityFramework not found: $OriginalUnityFramework"
 }
 
-Invoke-Step "Patch UnityFramework" {
-    python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
-        $OriginalUnityFramework `
-        $PatchedUnityFramework `
-        --report $PatchReport
-}
+if (-not $Plain) {
+    Invoke-Step "Patch UnityFramework" {
+        python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
+            $OriginalUnityFramework `
+            $PatchedUnityFramework `
+            --report $PatchReport
+    }
 
-if (-not $DylibPath) {
-    $DylibPath = Join-Path $ArtifactsDir "libXueSongProbe.dylib"
-}
-$DylibPath = Resolve-FullPath $DylibPath
+    if (-not $DylibPath) {
+        $DylibPath = Join-Path $ArtifactsDir "libXueSongProbe.dylib"
+    }
+    $DylibPath = Resolve-FullPath $DylibPath
 
-if (-not $SkipDownload) {
-    Invoke-Step "Download latest successful dylib artifact" {
-        if (Test-Path $ArtifactsDir) {
-            Remove-Item -Recurse -Force $ArtifactsDir
-        }
-        New-Item -ItemType Directory -Path $ArtifactsDir | Out-Null
+    if (-not $SkipDownload) {
+        Invoke-Step "Download latest successful dylib artifact" {
+            if (Test-Path $ArtifactsDir) {
+                Remove-Item -Recurse -Force $ArtifactsDir
+            }
+            New-Item -ItemType Directory -Path $ArtifactsDir | Out-Null
 
-        if (-not $RunId) {
-            $RunId = (& gh run list --branch xuesong-unityframework-probe --workflow "macOS Theos Build" --status success --limit 1 --json databaseId --jq '.[0].databaseId').Trim()
+            if (-not $RunId) {
+                $RunId = (& gh run list --branch xuesong-unityframework-probe --workflow "macOS Theos Build" --status success --limit 1 --json databaseId --jq '.[0].databaseId').Trim()
+            }
+            if (-not $RunId) {
+                throw "Could not find a successful GitHub Actions run. Pass -RunId or -SkipDownload -DylibPath."
+            }
+            gh run download $RunId -n XueSongProbe-ios-dylib -D $ArtifactsDir
         }
-        if (-not $RunId) {
-            throw "Could not find a successful GitHub Actions run. Pass -RunId or -SkipDownload -DylibPath."
-        }
-        gh run download $RunId -n XueSongProbe-ios-dylib -D $ArtifactsDir
+    }
+
+    if (-not (Test-Path $DylibPath)) {
+        throw "Probe dylib not found: $DylibPath"
     }
 }
 
-if (-not (Test-Path $DylibPath)) {
-    throw "Probe dylib not found: $DylibPath"
-}
-
-Invoke-Step "Stage patched app" {
+Invoke-Step "Stage app" {
     if (Test-Path $WorkDir) {
         Remove-Item -Recurse -Force $WorkDir
     }
@@ -87,14 +95,17 @@ Invoke-Step "Stage patched app" {
 
     Copy-Item -Recurse -Force (Join-Path $UnpackedAppDir "Payload") $WorkDir
 
-    $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
-    $TargetDylib = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\libXueSongProbe.dylib"
+    if (-not $Plain) {
+        $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
+        $TargetDylib = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\libXueSongProbe.dylib"
 
-    Copy-Item -Force $PatchedUnityFramework $TargetUnityFramework
-    Copy-Item -Force $DylibPath $TargetDylib
+        Copy-Item -Force $PatchedUnityFramework $TargetUnityFramework
+        Copy-Item -Force $DylibPath $TargetDylib
+    }
 }
 
-Invoke-Step "Verify patched UnityFramework load command" {
+if (-not $Plain) {
+    Invoke-Step "Verify patched UnityFramework load command" {
     $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
     $verify = @"
 import lief
@@ -104,7 +115,8 @@ ok = bool(b.find_library('@executable_path/Frameworks/libXueSongProbe.dylib'))
 print(ok)
 raise SystemExit(0 if ok else 1)
 "@
-    $verify | python -
+        $verify | python -
+    }
 }
 
 Invoke-Step "Package IPA" {
@@ -144,10 +156,18 @@ Invoke-Step "Verify IPA contents" {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($OutputIpa)
     try {
-        $needed = @(
-            "Payload/ProductName.app/Frameworks/libXueSongProbe.dylib",
-            "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework"
-        )
+        if ($Plain) {
+            $needed = @(
+                "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework",
+                "Payload/ProductName.app/ProductName"
+            )
+        }
+        else {
+            $needed = @(
+                "Payload/ProductName.app/Frameworks/libXueSongProbe.dylib",
+                "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework"
+            )
+        }
         foreach ($entryName in $needed) {
             $entry = $zip.Entries | Where-Object { $_.FullName -eq $entryName } | Select-Object -First 1
             if (-not $entry) {

@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES ?=
 
 include $(THEOS)/makefiles/common.mk
 
-LIBRARY_NAME = XueSongProbe
+TWEAK_NAME = XueSongProbe
 
 XueSongProbe_FILES = \
 	Dump/src/main.cxx
@@ -13,4 +13,4 @@ XueSongProbe_FILES = \
 XueSongProbe_CFLAGS = -fobjc-arc -I$(CURDIR)/Dump/include
 XueSongProbe_CCFLAGS = -std=c++17 -fno-rtti -I$(CURDIR)/Dump/include
 
-include $(THEOS_MAKE_PATH)/library.mk
+include $(THEOS_MAKE_PATH)/tweak.mk

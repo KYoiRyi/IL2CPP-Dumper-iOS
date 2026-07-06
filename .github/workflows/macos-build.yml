@@ -31,14 +31,14 @@ jobs:
         run: |
           make clean package FINALPACKAGE=1 TARGET=iphone:clang:latest:12.0
           mkdir -p artifacts
-          probe_dylib="$(find "$THEOS/lib" .theos -name '*XueSongProbe*.dylib' -print -quit)"
-          test -n "$probe_dylib"
-          cp "$probe_dylib" artifacts/libXueSongProbe.dylib
+          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/XueSongProbe.dylib artifacts/
+          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/XueSongProbe.plist artifacts/
 
-      - name: Upload iOS probe dylib
+      - name: Upload iOS probe tweak
         uses: actions/upload-artifact@v4
         with:
-          name: XueSongProbe-ios-dylib
+          name: XueSongProbe-ios-tweak
           path: |
-            artifacts/libXueSongProbe.dylib
+            artifacts/XueSongProbe.dylib
+            artifacts/XueSongProbe.plist
           if-no-files-found: error
