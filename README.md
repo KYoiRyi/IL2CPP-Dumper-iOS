@@ -1,110 +1,78 @@
-# IL2CPP Dumper iOS Tweak
+# XueSong UnityFramework Static Probe
 
-Runtime metadata dumper for Unity IL2CPP games packaged as a Theos iOS tweak.
+This branch removes the original runtime IL2CPP metadata dumper and keeps the
+project as a small iOS probe library plus a LIEF-based static patcher.
 
-This fork is packaged for MobileSubstrate/Substitute and starts from a tweak
-constructor inside the target app process.
-
-## What It Does
-
-- Waits for the IL2CPP runtime to become available in the target app.
-- Resolves IL2CPP exports with `dlsym` from the current process.
-- Attaches the worker thread with `il2cpp_thread_attach` when available.
-- Writes static C#-shaped metadata dumps and AI-friendly line-tagged dumps.
-- Can optionally write live scene, camera, mesh collider, and targeted class
-  scan dumps.
-
-## Output
-
-By default, files are written inside the target app sandbox:
+The patched `UnityFramework` does not need runtime code-page modification. The
+patcher appends ARM64 trampoline code to `__text`, places a writable pointer
+table in an existing `__data` zero cave, adds:
 
 ```text
-$HOME/Documents/IL2CPP-Dumper
+@executable_path/Frameworks/libXueSongProbe.dylib
 ```
 
-Set `IL2CPP_DUMPER_OUTPUT` in the target process environment to override it.
+and replaces selected function-entry instructions with `BL trampoline`.
 
-Static outputs:
+At load time `libXueSongProbe.dylib` scans the `UnityFramework` writable
+segments for the `XSPPTRS1` table and fills handler function pointers. The
+trampolines call those handlers, restore registers, and branch back to the
+original function after the overwritten instruction.
 
-- `IL2CPP_Dump_Normal/<assembly>.cs`
-- `IL2CPP_Dump_AI/<assembly>.cs`
-- `IL2CPP_Dump_Strings.txt`
-- `IL2CPPDump_Log.txt`
+## Current Static Entry Probes
 
-Optional live outputs:
+- `0x0400B4F4`
+  `PhxhSDK.FrameSync.Net.ReliableUdpClientChannel.Send(System.Byte[] payload)`
+- `0x0400BF28`
+  `PhxhSDK.FrameSync.Net.ReliableUdpClientChannel.ProcessPacket(System.Byte[] packet)`
+- `0x03ACDA84`
+  `Luban.ByteBuf.Wrap(System.Byte[] bytes)`
+- `0x03AD2768`
+  `Luban.ByteBuf.FromString(System.String value)`
 
-- `IL2CPP_World_Dump_<timestamp>.txt`
-- `IL2CPP_Camera_<timestamp>.txt`
-- `IL2CPP_MeshColliders_<timestamp>.txt`
-- `IL2CPP_MeshColliders_<timestamp>.bin`
-- `IL2CPP_Scan_<timestamp>.txt`
-
-## Configure Injection
-
-Edit `IL2CPPDumper.plist` and replace:
+Output is written under the app sandbox:
 
 ```text
-com.example.unitygame
+$HOME/Documents/XueSongProbe/
+  udp/
+  config/
+  dll/
 ```
 
-with the target app bundle identifier.
+## DLL Decryption Probe
 
-The Linux build helper can do this automatically:
+`PhxhSDK.AOT.YooDecryptionFS.LoadAssetBundle` starts at RVA `0x0401BFF8`, but
+the decrypted bundle bytes are not available at function entry. Use IDA to pick
+an internal post-decryption instruction address where the managed stream or
+buffer is live, then add that RVA to `scripts/patch_unityframework.py` with an
+argument adapter for `xsp_dll_blob(const void *, uint64_t)`.
 
-```bash
-TARGET_BUNDLE_ID=com.company.game ./scripts/build_linux.sh
-```
+The report file includes this target as a `post_only_targets` reminder.
 
-## Build On Linux
+## Build Probe Library
 
-Run:
-
-```bash
-./scripts/build_linux.sh
-```
-
-The script installs host build tools when it recognizes the package manager,
-clones Theos, downloads Theos iPhoneOS SDKs, links the selected SDK into Theos,
-and runs:
+With Theos configured:
 
 ```bash
 make clean package FINALPACKAGE=1
 ```
 
-Environment variables:
+The dylib must be placed in the app bundle at:
 
-- `TARGET_BUNDLE_ID`: replaces the placeholder filter bundle id.
-- `IOS_SDK_VERSION`: selects a specific SDK, for example `16.5`. Defaults to
-  `16.5`. The build helper installs the larger Swift 5.8 iOS toolchain because
-  the smaller clang-11 toolchain cannot reliably link newer `.tbd` stubs.
-- `THEOS`: uses an existing Theos checkout instead of `.deps/theos`.
+```text
+Payload/ProductName.app/Frameworks/libXueSongProbe.dylib
+```
 
-The resulting Debian package is written under `packages/`.
+The app must then be re-signed together with the patched framework and dylib.
 
-## Runtime Options
+## Patch UnityFramework
 
-Static dumping runs automatically after IL2CPP is ready.
+```bash
+python3 scripts/patch_unityframework.py \
+  Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework \
+  UnityFramework.patched \
+  --report xuesong_patch_report.json
+```
 
-Set these environment variables in the target process to enable extra runtime
-passes:
+Replace the original framework binary with `UnityFramework.patched`, copy the
+probe dylib into `Frameworks/`, and re-sign.
 
-- `IL2CPP_DUMPER_SCENE=1`: run camera, scene, and mesh collider dumps once.
-- `IL2CPP_DUMPER_DEEP_SCENE=1`: include MonoBehaviour field values during the
-  scene pass.
-
-For targeted class scans, place `IL2CPP_ScanList.txt` in the output directory
-with one fully-qualified class name per line.
-
-## iOS Notes
-
-- The old Windows structured exception handling was removed. The compatibility
-  wrappers compile as normal C++ `try/catch`, but invalid raw IL2CPP pointers can
-  still crash the target process on iOS.
-- The tweak expects exported IL2CPP symbols. If a game strips or hides them, a
-  symbol-offset resolver must be added for that title.
-- Keep the tweak filter narrow. Injecting into unrelated apps is noisy and may
-  crash them.
-
-## License
-
-MIT.

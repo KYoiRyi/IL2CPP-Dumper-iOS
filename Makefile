@@ -5,19 +5,12 @@ INSTALL_TARGET_PROCESSES ?=
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = IL2CPPDumper
+LIBRARY_NAME = XueSongProbe
 
-IL2CPPDumper_FILES = \
-	Dump/src/main.cxx \
-	Dump/src/platform.cxx \
-	Dump/src/utils.cxx \
-	Dump/src/il2cpp_api.cxx \
-	Dump/src/il2cpp_image.cxx \
-	Dump/src/il2cpp_class.cxx \
-	Dump/src/dumper.cxx \
-	Dump/src/scene_dumper.cxx
+XueSongProbe_FILES = \
+	Dump/src/main.cxx
 
-IL2CPPDumper_CFLAGS = -fobjc-arc -I$(CURDIR)/Dump/include
-IL2CPPDumper_CCFLAGS = -std=c++17 -fno-rtti -I$(CURDIR)/Dump/include
+XueSongProbe_CFLAGS = -fobjc-arc -I$(CURDIR)/Dump/include
+XueSongProbe_CCFLAGS = -std=c++17 -fno-rtti -I$(CURDIR)/Dump/include
 
-include $(THEOS_MAKE_PATH)/tweak.mk
+include $(THEOS_MAKE_PATH)/library.mk
