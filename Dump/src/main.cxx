@@ -73,7 +73,7 @@ static uint64_t NowMs() {
 }
 
 static void LogLine(const char * fmt, ...) {
-    std::lock_guard<std::mutex> guard(g_lock);
+    std::lock_guard<std::recursive_mutex> guard(g_lock);
     char path[1024];
     std::snprintf(path, sizeof(path), "%s/probe.log", RootDir().c_str());
 
@@ -130,7 +130,7 @@ static void WriteBlob(const char * dir, const char * tag, const void * data, siz
     if (!data || size == 0 || size > 64U * 1024U * 1024U)
         return;
 
-    std::lock_guard<std::mutex> guard(g_lock);
+    std::lock_guard<std::recursive_mutex> guard(g_lock);
     char path[1024];
     std::snprintf(path, sizeof(path), "%s/%s/%llu_%s_%llu.bin",
         RootDir().c_str(),
@@ -153,7 +153,7 @@ static void WriteText(const char * dir, const char * tag, const char * text, siz
     if (!text || size == 0 || size > 8U * 1024U * 1024U)
         return;
 
-    std::lock_guard<std::mutex> guard(g_lock);
+    std::lock_guard<std::recursive_mutex> guard(g_lock);
     char path[1024];
     std::snprintf(path, sizeof(path), "%s/%s/%llu_%s_%llu.txt",
         RootDir().c_str(),
