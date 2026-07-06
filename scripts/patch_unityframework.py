@@ -171,13 +171,14 @@ def main():
     parser.add_argument("input", type=Path, help="Original UnityFramework Mach-O")
     parser.add_argument("output", type=Path, help="Patched UnityFramework path")
     parser.add_argument("--report", type=Path, default=Path("xuesong_patch_report.json"))
+    parser.add_argument("--no-load-dylib", action="store_true", help="Do not add LC_LOAD_DYLIB for the probe receiver.")
     args = parser.parse_args()
 
     binary = lief.parse(str(args.input))
     if binary is None:
         raise SystemExit("failed to parse input Mach-O")
 
-    if binary.find_library(DYLIB_LOAD) is None:
+    if not args.no_load_dylib and binary.find_library(DYLIB_LOAD) is None:
         binary.add_library(DYLIB_LOAD)
 
     text_section = binary.get_section("__text")
@@ -206,6 +207,7 @@ def main():
 
     report = {
         "dylib": DYLIB_LOAD,
+        "load_dylib_added": not args.no_load_dylib,
         "pointer_table_marker": PTR_MARKER.decode("ascii", errors="replace"),
         "pointer_table_rva": ptr_va - binary.imagebase,
         "trampoline_area_rva": text_va - binary.imagebase,

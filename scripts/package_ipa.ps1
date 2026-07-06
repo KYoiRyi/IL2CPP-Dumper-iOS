@@ -6,7 +6,8 @@ param(
     [string]$OutputIpa = "",
     [string]$WorkDir = "",
     [switch]$SkipDownload,
-    [switch]$Plain
+    [switch]$Plain,
+    [switch]$PatchedNoReceiver
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,7 +30,10 @@ if (-not $UnpackedAppDir) {
 $UnpackedAppDir = Resolve-FullPath $UnpackedAppDir
 
 if (-not $OutputIpa) {
-    if ($Plain) {
+    if ($PatchedNoReceiver) {
+        $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_patched_no_receiver_unsigned.ipa"
+    }
+    elseif ($Plain) {
         $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_plain_repacked_unsigned.ipa"
     }
     else {
@@ -52,7 +56,16 @@ if (-not (Test-Path $OriginalUnityFramework)) {
     throw "UnityFramework not found: $OriginalUnityFramework"
 }
 
-if (-not $Plain) {
+if ($PatchedNoReceiver) {
+    Invoke-Step "Patch UnityFramework without receiver load command" {
+        python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
+            $OriginalUnityFramework `
+            $PatchedUnityFramework `
+            --report $PatchReport `
+            --no-load-dylib
+    }
+}
+elseif (-not $Plain) {
     Invoke-Step "Patch UnityFramework" {
         python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
             $OriginalUnityFramework `
@@ -95,7 +108,11 @@ Invoke-Step "Stage app" {
 
     Copy-Item -Recurse -Force (Join-Path $UnpackedAppDir "Payload") $WorkDir
 
-    if (-not $Plain) {
+    if ($PatchedNoReceiver) {
+        $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
+        Copy-Item -Force $PatchedUnityFramework $TargetUnityFramework
+    }
+    elseif (-not $Plain) {
         $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
         $TargetDylib = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\libXueSongProbe.dylib"
 
@@ -104,7 +121,21 @@ Invoke-Step "Stage app" {
     }
 }
 
-if (-not $Plain) {
+if ($PatchedNoReceiver) {
+    Invoke-Step "Verify patched UnityFramework has no receiver load command" {
+        $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
+        $verify = @"
+import lief
+p = r'''$TargetUnityFramework'''
+b = lief.parse(p)
+ok = not bool(b.find_library('@executable_path/Frameworks/libXueSongProbe.dylib'))
+print(ok)
+raise SystemExit(0 if ok else 1)
+"@
+        $verify | python -
+    }
+}
+elseif (-not $Plain) {
     Invoke-Step "Verify patched UnityFramework load command" {
     $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
     $verify = @"
@@ -157,6 +188,12 @@ Invoke-Step "Verify IPA contents" {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($OutputIpa)
     try {
         if ($Plain) {
+            $needed = @(
+                "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework",
+                "Payload/ProductName.app/ProductName"
+            )
+        }
+        elseif ($PatchedNoReceiver) {
             $needed = @(
                 "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework",
                 "Payload/ProductName.app/ProductName"
