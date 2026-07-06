@@ -9,8 +9,11 @@
 #include <mach-o/loader.h>
 #include <mach/vm_prot.h>
 #include <mutex>
+#include <signal.h>
+#include <stdarg.h>
 #include <string>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 extern "C" __attribute__((visibility("default"))) void xsp_udp_send_payload(void * self, void * payload);
@@ -36,7 +39,7 @@ struct Il2CppStringHeader {
     uint16_t chars[0];
 };
 
-std::mutex g_lock;
+std::recursive_mutex g_lock;
 std::atomic<uint64_t> g_counter { 0 };
 std::string g_root;
 
@@ -69,6 +72,60 @@ static uint64_t NowMs() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000ULL + static_cast<uint64_t>(ts.tv_nsec / 1000000ULL);
 }
 
+static void LogLine(const char * fmt, ...) {
+    std::lock_guard<std::mutex> guard(g_lock);
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/probe.log", RootDir().c_str());
+
+    FILE * fp = std::fopen(path, "ab");
+    if (!fp)
+        return;
+
+    std::fprintf(fp, "[%llu] ", static_cast<unsigned long long>(NowMs()));
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(fp, fmt, ap);
+    va_end(ap);
+    std::fprintf(fp, "\n");
+    std::fclose(fp);
+}
+
+static void SignalLog(int sig, siginfo_t * info, void * context) {
+    (void)context;
+    char path[1024];
+    const char * root = g_root.empty() ? "/tmp" : g_root.c_str();
+    int n = std::snprintf(path, sizeof(path), "%s/crash_signal.log", root);
+    if (n <= 0)
+        _exit(128 + sig);
+
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd >= 0) {
+        char line[256];
+        int len = std::snprintf(line, sizeof(line),
+            "signal=%d fault_addr=%p counter=%llu\n",
+            sig,
+            info ? info->si_addr : nullptr,
+            static_cast<unsigned long long>(g_counter.load()));
+        if (len > 0)
+            ::write(fd, line, static_cast<size_t>(len));
+        ::close(fd);
+    }
+
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void InstallSignalLogs() {
+    struct sigaction sa {};
+    sa.sa_sigaction = SignalLog;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
+    sigaction(SIGILL, &sa, nullptr);
+    sigaction(SIGSEGV, &sa, nullptr);
+}
+
 static void WriteBlob(const char * dir, const char * tag, const void * data, size_t size) {
     if (!data || size == 0 || size > 64U * 1024U * 1024U)
         return;
@@ -83,10 +140,13 @@ static void WriteBlob(const char * dir, const char * tag, const void * data, siz
         static_cast<unsigned long long>(g_counter.fetch_add(1)));
 
     FILE * fp = std::fopen(path, "wb");
-    if (!fp)
+    if (!fp) {
+        LogLine("WriteBlob failed dir=%s tag=%s size=%llu errno=%d", dir, tag, static_cast<unsigned long long>(size), errno);
         return;
+    }
     std::fwrite(data, 1, size, fp);
     std::fclose(fp);
+    LogLine("WriteBlob ok dir=%s tag=%s size=%llu", dir, tag, static_cast<unsigned long long>(size));
 }
 
 static void WriteText(const char * dir, const char * tag, const char * text, size_t size) {
@@ -103,16 +163,21 @@ static void WriteText(const char * dir, const char * tag, const char * text, siz
         static_cast<unsigned long long>(g_counter.fetch_add(1)));
 
     FILE * fp = std::fopen(path, "wb");
-    if (!fp)
+    if (!fp) {
+        LogLine("WriteText failed dir=%s tag=%s size=%llu errno=%d", dir, tag, static_cast<unsigned long long>(size), errno);
         return;
+    }
     std::fwrite(text, 1, size, fp);
     std::fclose(fp);
+    LogLine("WriteText ok dir=%s tag=%s size=%llu", dir, tag, static_cast<unsigned long long>(size));
 }
 
 static void DumpByteArray(const char * dir, const char * tag, void * arrayObj) {
+    LogLine("DumpByteArray enter dir=%s tag=%s array=%p", dir, tag, arrayObj);
     auto * array = reinterpret_cast<Il2CppArrayHeader *>(arrayObj);
     if (!array)
         return;
+    LogLine("DumpByteArray header dir=%s tag=%s len=%llu data=%p", dir, tag, static_cast<unsigned long long>(array->max_length), array->vector);
     WriteBlob(dir, tag, array->vector, static_cast<size_t>(array->max_length));
 }
 
@@ -138,9 +203,11 @@ static std::string Utf16ToUtf8(const uint16_t * chars, int32_t len) {
 }
 
 static void DumpString(const char * dir, const char * tag, void * stringObj) {
+    LogLine("DumpString enter dir=%s tag=%s string=%p", dir, tag, stringObj);
     auto * s = reinterpret_cast<Il2CppStringHeader *>(stringObj);
     if (!s || s->length <= 0 || s->length > 1024 * 1024)
         return;
+    LogLine("DumpString header dir=%s tag=%s len=%d chars=%p", dir, tag, s->length, s->chars);
     std::string utf8 = Utf16ToUtf8(s->chars, s->length);
     WriteText(dir, tag, utf8.data(), utf8.size());
 }
@@ -150,6 +217,7 @@ static bool ContainsName(const char * imageName, const char * needle) {
 }
 
 static void FillPointerTable() {
+    LogLine("FillPointerTable begin");
     void * handlers[] = {
         reinterpret_cast<void *>(&xsp_udp_send_payload),
         reinterpret_cast<void *>(&xsp_udp_process_packet),
@@ -162,6 +230,7 @@ static void FillPointerTable() {
         const char * imageName = _dyld_get_image_name(i);
         if (!ContainsName(imageName, "UnityFramework"))
             continue;
+        LogLine("FillPointerTable image=%s", imageName);
 
         const mach_header_64 * header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(i));
         intptr_t slide = _dyld_get_image_vmaddr_slide(i);
@@ -182,6 +251,7 @@ static void FillPointerTable() {
                             void ** slots = reinterpret_cast<void **>(p + 8);
                             for (size_t n = 0; n < sizeof(handlers) / sizeof(handlers[0]); ++n)
                                 slots[n] = handlers[n];
+                            LogLine("FillPointerTable ok table=%p slots=%p", p, slots);
                             return;
                         }
                     }
@@ -190,33 +260,40 @@ static void FillPointerTable() {
             cursor += cmd->cmdsize;
         }
     }
+    LogLine("FillPointerTable marker not found");
 }
 
 } // namespace
 
 extern "C" __attribute__((visibility("default"))) void xsp_udp_send_payload(void * self, void * payload) {
-    (void)self;
+    LogLine("handler xsp_udp_send_payload self=%p payload=%p", self, payload);
     DumpByteArray("udp", "send_payload", payload);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_udp_process_packet(void * self, void * packet) {
-    (void)self;
+    LogLine("handler xsp_udp_process_packet self=%p packet=%p", self, packet);
     DumpByteArray("udp", "process_packet", packet);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_config_bytebuf_wrap(void * bytes) {
+    LogLine("handler xsp_config_bytebuf_wrap bytes=%p", bytes);
     DumpByteArray("config", "bytebuf_wrap", bytes);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_config_from_string(void * value) {
+    LogLine("handler xsp_config_from_string value=%p", value);
     DumpString("config", "from_string", value);
 }
 
 extern "C" __attribute__((visibility("default"))) void xsp_dll_blob(const void * data, uint64_t size) {
+    LogLine("handler xsp_dll_blob data=%p size=%llu", data, static_cast<unsigned long long>(size));
     WriteBlob("dll", "decrypted_bundle", data, static_cast<size_t>(size));
 }
 
 __attribute__((constructor)) static void XueSongProbeCtor() {
     RootDir();
+    InstallSignalLogs();
+    LogLine("XueSongProbe ctor begin");
     FillPointerTable();
+    LogLine("XueSongProbe ctor end");
 }

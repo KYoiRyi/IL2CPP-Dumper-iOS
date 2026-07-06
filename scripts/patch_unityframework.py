@@ -53,7 +53,7 @@ POST_ONLY_TARGETS = [
         "candidate_function_rva": 0x0401BFF8,
         "handler": "xsp_dll_blob",
         "source": "PhxhSDK.AOT.YooDecryptionFS.LoadAssetBundle(YooAsset.DecryptFileInfo fileInfo, System.IO.Stream& managedStream)",
-        "note": "需要在 IDA 中精确到 managedStream 已指向解密后数据流、AssetBundle.LoadFromStream 前后的指令 RVA；入口点拿不到明文 bundle。",
+        "note": "Pick an internal post-decryption RVA in IDA; function entry cannot see the plaintext bundle.",
     },
 ]
 
@@ -124,9 +124,10 @@ def nop():
 def make_trampoline(tramp_va, target_return_va, slot_va, original_instruction):
     code = bytearray()
 
-    # Preserve argument registers plus link register. The original function sees
-    # the same x0-x7/x30 values after the probe call returns.
-    for a, b in [(0, 1), (2, 3), (4, 5), (6, 7), (30, 30)]:
+    # Preserve caller-saved argument/scratch registers plus link register. The
+    # original function sees the same x0-x17/x30 after the probe call returns.
+    # x18 is intentionally left alone; it is platform-reserved on Apple arm64.
+    for a, b in [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9), (10, 11), (12, 13), (14, 15), (16, 17), (30, 30)]:
         code += stp_pre(a, b)
 
     adrp_pc = tramp_va + len(code)
@@ -141,7 +142,7 @@ def make_trampoline(tramp_va, target_return_va, slot_va, original_instruction):
     restore_start = tramp_va + len(code)
     code[cbz_pc - tramp_va: cbz_pc - tramp_va + 4] = cbz(16, cbz_pc, restore_start)
 
-    for a, b in [(30, 30), (6, 7), (4, 5), (2, 3), (0, 1)]:
+    for a, b in [(30, 30), (16, 17), (14, 15), (12, 13), (10, 11), (8, 9), (6, 7), (4, 5), (2, 3), (0, 1)]:
         code += ldp_post(a, b)
 
     code += original_instruction
@@ -225,7 +226,7 @@ def main():
         if len(tramp) > 0x100:
             raise SystemExit(f"trampoline too large for {hook['name']}")
         binary.patch_address(tramp_va, list(tramp))
-        binary.patch_address(target_va, list(patch_branch(target_va, tramp_va, link=True)))
+        binary.patch_address(target_va, list(patch_branch(target_va, tramp_va, link=False)))
 
         item = dict(hook)
         item.update({
@@ -233,7 +234,7 @@ def main():
             "trampoline_rva": tramp_va - binary.imagebase,
             "slot_rva": slot_va - binary.imagebase,
             "original_instruction": original_instruction.hex(),
-            "patched_instruction": patch_branch(target_va, tramp_va, link=True).hex(),
+            "patched_instruction": patch_branch(target_va, tramp_va, link=False).hex(),
         })
         report["hooks"].append(item)
 
