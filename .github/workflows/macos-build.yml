@@ -31,7 +31,9 @@ jobs:
         run: |
           make clean package FINALPACKAGE=1 TARGET=iphone:clang:latest:12.0
           mkdir -p artifacts
-          cp .theos/_/usr/lib/libXueSongProbe.dylib artifacts/
+          probe_dylib="$(find "$THEOS/lib" .theos -name '*XueSongProbe*.dylib' -print -quit)"
+          test -n "$probe_dylib"
+          cp "$probe_dylib" artifacts/libXueSongProbe.dylib
 
       - name: Upload iOS probe dylib
         uses: actions/upload-artifact@v4
