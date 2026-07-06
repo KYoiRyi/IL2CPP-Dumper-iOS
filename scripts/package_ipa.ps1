@@ -5,9 +5,11 @@ param(
     [string]$RunId = "",
     [string]$OutputIpa = "",
     [string]$WorkDir = "",
+    [string]$OnlyHook = "",
     [switch]$SkipDownload,
     [switch]$Plain,
-    [switch]$PatchedNoReceiver
+    [switch]$PatchedNoReceiver,
+    [switch]$PatchedStubOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +32,15 @@ if (-not $UnpackedAppDir) {
 $UnpackedAppDir = Resolve-FullPath $UnpackedAppDir
 
 if (-not $OutputIpa) {
-    if ($PatchedNoReceiver) {
+    if ($PatchedStubOnly) {
+        if ($OnlyHook) {
+            $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_patched_stub_only_$OnlyHook`_unsigned.ipa"
+        }
+        else {
+            $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_patched_stub_only_unsigned.ipa"
+        }
+    }
+    elseif ($PatchedNoReceiver) {
         $OutputIpa = Join-Path $WorkspaceRoot "xuesong_1.0.1_patched_no_receiver_unsigned.ipa"
     }
     elseif ($Plain) {
@@ -56,21 +66,52 @@ if (-not (Test-Path $OriginalUnityFramework)) {
     throw "UnityFramework not found: $OriginalUnityFramework"
 }
 
-if ($PatchedNoReceiver) {
+if ($PatchedStubOnly) {
+    Invoke-Step "Patch UnityFramework with branch stub only" {
+        $args = @(
+            (Join-Path $RepoRoot "scripts\patch_unityframework.py"),
+            $OriginalUnityFramework,
+            $PatchedUnityFramework,
+            "--report",
+            $PatchReport,
+            "--no-load-dylib",
+            "--stub-only"
+        )
+        if ($OnlyHook) {
+            $args += @("--only", $OnlyHook)
+        }
+        python @args
+    }
+}
+elseif ($PatchedNoReceiver) {
     Invoke-Step "Patch UnityFramework without receiver load command" {
-        python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
-            $OriginalUnityFramework `
-            $PatchedUnityFramework `
-            --report $PatchReport `
-            --no-load-dylib
+        $args = @(
+            (Join-Path $RepoRoot "scripts\patch_unityframework.py"),
+            $OriginalUnityFramework,
+            $PatchedUnityFramework,
+            "--report",
+            $PatchReport,
+            "--no-load-dylib"
+        )
+        if ($OnlyHook) {
+            $args += @("--only", $OnlyHook)
+        }
+        python @args
     }
 }
 elseif (-not $Plain) {
     Invoke-Step "Patch UnityFramework" {
-        python (Join-Path $RepoRoot "scripts\patch_unityframework.py") `
-            $OriginalUnityFramework `
-            $PatchedUnityFramework `
-            --report $PatchReport
+        $args = @(
+            (Join-Path $RepoRoot "scripts\patch_unityframework.py"),
+            $OriginalUnityFramework,
+            $PatchedUnityFramework,
+            "--report",
+            $PatchReport
+        )
+        if ($OnlyHook) {
+            $args += @("--only", $OnlyHook)
+        }
+        python @args
     }
 
     if (-not $DylibPath) {
@@ -108,7 +149,11 @@ Invoke-Step "Stage app" {
 
     Copy-Item -Recurse -Force (Join-Path $UnpackedAppDir "Payload") $WorkDir
 
-    if ($PatchedNoReceiver) {
+    if ($PatchedStubOnly) {
+        $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
+        Copy-Item -Force $PatchedUnityFramework $TargetUnityFramework
+    }
+    elseif ($PatchedNoReceiver) {
         $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
         Copy-Item -Force $PatchedUnityFramework $TargetUnityFramework
     }
@@ -121,7 +166,21 @@ Invoke-Step "Stage app" {
     }
 }
 
-if ($PatchedNoReceiver) {
+if ($PatchedStubOnly) {
+    Invoke-Step "Verify stub-only UnityFramework has no receiver load command" {
+        $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
+        $verify = @"
+import lief
+p = r'''$TargetUnityFramework'''
+b = lief.parse(p)
+ok = not bool(b.find_library('@executable_path/Frameworks/libXueSongProbe.dylib'))
+print(ok)
+raise SystemExit(0 if ok else 1)
+"@
+        $verify | python -
+    }
+}
+elseif ($PatchedNoReceiver) {
     Invoke-Step "Verify patched UnityFramework has no receiver load command" {
         $TargetUnityFramework = Join-Path $WorkDir "Payload\ProductName.app\Frameworks\UnityFramework.framework\UnityFramework"
         $verify = @"
@@ -193,7 +252,7 @@ Invoke-Step "Verify IPA contents" {
                 "Payload/ProductName.app/ProductName"
             )
         }
-        elseif ($PatchedNoReceiver) {
+        elseif ($PatchedNoReceiver -or $PatchedStubOnly) {
             $needed = @(
                 "Payload/ProductName.app/Frameworks/UnityFramework.framework/UnityFramework",
                 "Payload/ProductName.app/ProductName"

@@ -121,6 +121,15 @@ def nop():
     return u32(0xD503201F)
 
 
+def make_stub_trampoline(tramp_va, target_return_va, original_instruction):
+    code = bytearray()
+    code += original_instruction
+    code += patch_branch(tramp_va + len(code), target_return_va, link=False)
+    while len(code) % 16:
+        code += nop()
+    return bytes(code)
+
+
 def make_trampoline(tramp_va, target_return_va, slot_va, original_instruction):
     code = bytearray()
 
@@ -172,6 +181,8 @@ def main():
     parser.add_argument("output", type=Path, help="Patched UnityFramework path")
     parser.add_argument("--report", type=Path, default=Path("xuesong_patch_report.json"))
     parser.add_argument("--no-load-dylib", action="store_true", help="Do not add LC_LOAD_DYLIB for the probe receiver.")
+    parser.add_argument("--stub-only", action="store_true", help="Patch branches only; trampolines execute the original instruction and return without touching data or receiver slots.")
+    parser.add_argument("--only", choices=[hook["name"] for hook in HOOKS], help="Patch only one hook by name.")
     args = parser.parse_args()
 
     binary = lief.parse(str(args.input))
@@ -186,15 +197,16 @@ def main():
     if text_section is None or data_section is None:
         raise SystemExit("missing __text or __data section")
 
+    selected_hooks = [hook for hook in HOOKS if not args.only or hook["name"] == args.only]
     ptr_content = bytearray(PTR_MARKER)
     ptr_content += b"\x00" * (8 * len(HOOKS))
-    ptr_size = (len(ptr_content) + 15) & ~15
-    tramp_size = 0x100 * len(HOOKS)
+    ptr_size = 0 if args.stub_only else (len(ptr_content) + 15) & ~15
+    tramp_size = 0x100 * len(selected_hooks)
 
     old_text_size = text_section.size
     if not binary.extend_section(text_section, tramp_size):
         raise SystemExit("failed to extend __text")
-    ptr_va_planned = find_zero_cave(binary, "__data", ptr_size, align=8)
+    ptr_va_planned = 0 if args.stub_only else find_zero_cave(binary, "__data", ptr_size, align=8)
 
     # Rebuild once so LIEF assigns final section addresses.
     tmp = args.output.with_suffix(args.output.suffix + ".stage1")
@@ -208,22 +220,27 @@ def main():
     report = {
         "dylib": DYLIB_LOAD,
         "load_dylib_added": not args.no_load_dylib,
+        "stub_only": args.stub_only,
+        "only": args.only,
         "pointer_table_marker": PTR_MARKER.decode("ascii", errors="replace"),
-        "pointer_table_rva": ptr_va - binary.imagebase,
+        "pointer_table_rva": None if args.stub_only else ptr_va - binary.imagebase,
         "trampoline_area_rva": text_va - binary.imagebase,
         "hooks": [],
         "post_only_targets": POST_ONLY_TARGETS,
     }
 
-    for hook in HOOKS:
+    for tramp_index, hook in enumerate(selected_hooks):
         target_va = binary.imagebase + hook["rva"]
         return_va = target_va + 4
-        tramp_va = text_va + hook["slot"] * 0x100
-        slot_va = ptr_va + len(PTR_MARKER) + hook["slot"] * 8
+        tramp_va = text_va + tramp_index * 0x100
+        slot_va = 0 if args.stub_only else ptr_va + len(PTR_MARKER) + hook["slot"] * 8
         original_instruction = bytes(binary.get_content_from_virtual_address(target_va, 4))
         if len(original_instruction) != 4:
             raise SystemExit(f"failed to read original instruction for {hook['name']}")
-        tramp = make_trampoline(tramp_va, return_va, slot_va, original_instruction)
+        if args.stub_only:
+            tramp = make_stub_trampoline(tramp_va, return_va, original_instruction)
+        else:
+            tramp = make_trampoline(tramp_va, return_va, slot_va, original_instruction)
 
         if len(tramp) > 0x100:
             raise SystemExit(f"trampoline too large for {hook['name']}")
@@ -234,13 +251,14 @@ def main():
         item.update({
             "target_va": target_va,
             "trampoline_rva": tramp_va - binary.imagebase,
-            "slot_rva": slot_va - binary.imagebase,
+            "slot_rva": None if args.stub_only else slot_va - binary.imagebase,
             "original_instruction": original_instruction.hex(),
             "patched_instruction": patch_branch(target_va, tramp_va, link=False).hex(),
         })
         report["hooks"].append(item)
 
-    binary.patch_address(ptr_va, list(ptr_content + b"\x00" * (ptr_size - len(ptr_content))))
+    if not args.stub_only:
+        binary.patch_address(ptr_va, list(ptr_content + b"\x00" * (ptr_size - len(ptr_content))))
     binary.write(str(args.output))
     if tmp.exists():
         tmp.unlink()
