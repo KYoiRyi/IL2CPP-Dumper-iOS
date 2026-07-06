@@ -121,7 +121,7 @@ def nop():
     return u32(0xD503201F)
 
 
-def make_trampoline(tramp_va, target_return_va, slot_va):
+def make_trampoline(tramp_va, target_return_va, slot_va, original_instruction):
     code = bytearray()
 
     # Preserve argument registers plus link register. The original function sees
@@ -144,6 +144,7 @@ def make_trampoline(tramp_va, target_return_va, slot_va):
     for a, b in [(30, 30), (6, 7), (4, 5), (2, 3), (0, 1)]:
         code += ldp_post(a, b)
 
+    code += original_instruction
     code += patch_branch(tramp_va + len(code), target_return_va, link=False)
     while len(code) % 16:
         code += nop()
@@ -216,7 +217,10 @@ def main():
         return_va = target_va + 4
         tramp_va = text_va + hook["slot"] * 0x100
         slot_va = ptr_va + len(PTR_MARKER) + hook["slot"] * 8
-        tramp = make_trampoline(tramp_va, return_va, slot_va)
+        original_instruction = bytes(binary.get_content_from_virtual_address(target_va, 4))
+        if len(original_instruction) != 4:
+            raise SystemExit(f"failed to read original instruction for {hook['name']}")
+        tramp = make_trampoline(tramp_va, return_va, slot_va, original_instruction)
 
         if len(tramp) > 0x100:
             raise SystemExit(f"trampoline too large for {hook['name']}")
@@ -228,6 +232,7 @@ def main():
             "target_va": target_va,
             "trampoline_rva": tramp_va - binary.imagebase,
             "slot_rva": slot_va - binary.imagebase,
+            "original_instruction": original_instruction.hex(),
             "patched_instruction": patch_branch(target_va, tramp_va, link=True).hex(),
         })
         report["hooks"].append(item)

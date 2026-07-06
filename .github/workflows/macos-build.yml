@@ -31,14 +31,12 @@ jobs:
         run: |
           make clean package FINALPACKAGE=1 TARGET=iphone:clang:latest:12.0
           mkdir -p artifacts
-          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/IL2CPPDumper.dylib artifacts/
-          cp .theos/_/Library/MobileSubstrate/DynamicLibraries/IL2CPPDumper.plist artifacts/
+          cp .theos/_/usr/lib/libXueSongProbe.dylib artifacts/
 
-      - name: Upload iOS dylib
+      - name: Upload iOS probe dylib
         uses: actions/upload-artifact@v4
         with:
-          name: IL2CPPDumper-ios-dylib
+          name: XueSongProbe-ios-dylib
           path: |
-            artifacts/IL2CPPDumper.dylib
-            artifacts/IL2CPPDumper.plist
+            artifacts/libXueSongProbe.dylib
           if-no-files-found: error
